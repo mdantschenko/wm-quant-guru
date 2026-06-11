@@ -27,17 +27,18 @@ class TournamentOddsConfig:
     ODDS_HEADER_MARKER: str = "odds_ft_home_team_win"
 
     # Beschrifteter Dateiname -> FootyStats-Wettbewerbs-ID.
-    # Bestätigt (ohne Login abrufbar):
-    #   World Cup 2018 = 1425, World Cup 2022 = 7432, Copa America 2024 = 12076
-    # Euro-IDs (2016/2020/2024): von der FootyStats-Euro-Datasets-Seite im
-    # Browser ablesen und unten eintragen (None => wird übersprungen).
+    # comp-IDs aus der offiziellen FootyStats-API (league-list, key=example)
+    # und per Inhalt verifiziert (Spielzahl + Datumsbereich + Quotenspalten).
     COMPETITIONS: dict[str, int | None] = {
+        "World Cup 2014": 1384,
         "World Cup 2018": 1425,
         "World Cup 2022": 7432,
+        "Euro 2016": 1400,
+        "Euro 2020 (EM 2021)": 5635,
+        "Euro 2024": 11084,
+        "Copa America 2019": 1956,
+        "Copa America 2021": 5862,
         "Copa America 2024": 12076,
-        "Euro 2016": None,
-        "Euro 2020 (EM 2021)": None,
-        "Euro 2024": None,
     }
 
 
