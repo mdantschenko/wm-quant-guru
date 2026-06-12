@@ -4,27 +4,8 @@ prompt.txt
 konzept.*
 !konzept.pdf
 
-FIFA Men's World Ranking/
-Football - FIFA World Cup, 1930 - 2026/
-Football Betting Odds (football-data.co.uk)/
-International Football Elo Ratings (1872-2025)/
-International football results from 1872 to 2026/
-Beat The Bookie Odds Series Football Dataset/
-.claude/
-International & Tournament Odds (Beat The Bookie 2005-2015)/
-Tournament Odds (FootyStats)/
-World Cup Workbook (football-data.co.uk)/
-Transfermarkt Market Values (player-scores)/
-xG Tournament Data (StatsBomb Open Data)/
-Tournament Squads (FootyStats)/
-EA Sports FC Ratings (FIFA 15-24)/
-Match Weather (Open-Meteo)/
-World Cup 2026 (FootyStats)/
-World Cup 2026 Squads (Wikipedia)/
-Computed Features/
-Tournament Squads (Wikipedia)/
-__pycache__/
-Alternative Data (GDELT News Tone)/
-Alternative Data (Prediction Markets)/
-Alternative Data (Reddit)/
-Alternative Data (Wikipedia Pageviews)/CLAUDE.md
+.claude
+CLAUDE.md
+
+Data/
+
