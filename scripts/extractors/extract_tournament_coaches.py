@@ -30,11 +30,12 @@ def parse_coaches(wikitext: str) -> list[tuple[str, str, str]]:
         if team_match:
             team = team_match.group(1)
             continue
-        # Nur Zeilen, die mit "(Head) Coach:" BEGINNEN (Wiki-Markup wie
-        # ";" oder "'''" davor erlaubt) -- schliesst Fliesstext-Treffer
-        # wie "...the coach said..." oder Verbands-/Quellen-Links aus.
+        # Nur Zeilen, die mit "(Head) Coach:" oder "Manager:" BEGINNEN
+        # (Wiki-Markup wie ";" oder "'''" davor erlaubt) -- WM-Seiten
+        # nutzen "Coach:", EM-Seiten "Manager:"; schliesst Fliesstext-
+        # Treffer und Verbands-/Quellen-Links aus.
         coach_match = re.match(
-            r"^[;:'*\s]*(?:Head\s+)?[Cc]oach\s*:\s*(.+)$", line
+            r"^[;:'*\s]*(?:Head\s+)?(?:[Cc]oach|[Mm]anager)\s*:\s*(.+)$", line
         )
         if coach_match is None or not team:
             continue

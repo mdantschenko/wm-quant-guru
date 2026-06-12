@@ -1,11 +1,14 @@
 kaggle.json
-prompt.txt
 
 konzept.*
 !konzept.pdf
 
 .claude
 CLAUDE.md
+
+*.pyc
+*.txt
+!README.txt
 
 Data/
 

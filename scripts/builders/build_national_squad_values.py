@@ -24,7 +24,18 @@ class SquadValueConfig:
     FIRST_AS_OF: date = date(2005, 1, 1)
     SQUAD_SIZE: int = 26          # WM-Kadergröße als Top-N-Proxy
     LOOKBACK_DAYS: int = 540      # Bewertung max. ~18 Monate alt
-    MIN_PLAYERS: int = 10         # Länder mit weniger bewerteten Spielern entfallen
+    MIN_PLAYERS: int = 6          # Länder mit weniger bewerteten Spielern entfallen
+                                  # (6 statt 10, damit duenn abgedeckte
+                                  # WM-Teilnehmer wie Jordanien erfasst sind)
+
+    # Transfermarkt-Schreibweisen -> kanonische Namen (Wikipedia-Kader).
+    COUNTRY_ALIASES: dict[str, str] = {
+        "Bosnia-Herzegovina": "Bosnia and Herzegovina",
+        "Korea, South": "South Korea",
+        "Korea, North": "North Korea",
+        "Cote d'Ivoire": "Ivory Coast",
+        "Curacao": "Curaçao",
+    }
 
 
 def semiannual_grid(first: date, last: date) -> list[date]:
@@ -46,7 +57,9 @@ def load_citizenship(config: SquadValueConfig) -> dict[int, str]:
         for row in csv.DictReader(handle):
             country = (row.get("country_of_citizenship") or "").strip()
             if country:
-                citizenship[int(row["player_id"])] = country
+                citizenship[int(row["player_id"])] = config.COUNTRY_ALIASES.get(
+                    country, country
+                )
     return citizenship
 
 

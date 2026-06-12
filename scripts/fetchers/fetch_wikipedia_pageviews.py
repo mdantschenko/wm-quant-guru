@@ -32,8 +32,9 @@ class PageviewsConfig:
     )
     USER_AGENT: str = "wm-quant-guru/1.0 (research; pageview features)"
     TIMEOUT_SECONDS: int = 30
-    POLITE_DELAY_SECONDS: float = 0.25  # REST-API drosselt Bursts (429)
-    RETRY_WAIT_SECONDS: float = 3.0
+    POLITE_DELAY_SECONDS: float = 1.0   # REST-API drosselt nachhaltig (429
+                                        # bei ~4 req/s ueber laengere Laeufe)
+    RETRY_WAIT_SECONDS: float = 10.0
 
     TEAMS_FILE: str = "Data/World Cup 2026 (FootyStats)/teams.csv"
     OUTPUT_DIR: str = "Data/Alternative Data (Wikipedia Pageviews)"
@@ -45,6 +46,8 @@ class PageviewsConfig:
         "USA": "United States men's national soccer team",
         "Iran": "Iran national football team",
         "Ireland": "Republic of Ireland national football team",
+        # FootyStats schreibt das Land ohne "and".
+        "Bosnia Herzegovina": "Bosnia and Herzegovina national football team",
     }
 
 
