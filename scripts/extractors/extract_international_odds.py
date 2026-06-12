@@ -19,9 +19,9 @@ class ExtractConfig:
     """Pfade und Filtermuster für Männer-Nationalmannschaftsspiele."""
 
     SOURCE_GZ: str = (
-        "Beat The Bookie Odds Series Football Dataset/closing_odds.csv.gz"
+        "Data/Beat The Bookie Odds Series Football Dataset/closing_odds.csv.gz"
     )
-    OUTPUT_DIR: str = "International & Tournament Odds (Beat The Bookie 2005-2015)"
+    OUTPUT_DIR: str = "Data/International & Tournament Odds (Beat The Bookie 2005-2015)"
     OUTPUT_FILE: str = "international_closing_odds.csv"
     LEAGUE_COLUMN: str = "league"
 

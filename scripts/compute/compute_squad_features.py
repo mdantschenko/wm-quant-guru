@@ -18,8 +18,8 @@ from pathlib import Path
 class SquadFeatureConfig:
     """Quelle, Zielpfad und Parameter."""
 
-    SQUADS_DIR: str = "Tournament Squads (Wikipedia)"
-    OUTPUT_FILE: str = "Computed Features/club_chemistry_hhi.csv"
+    SQUADS_DIR: str = "Data/Tournament Squads (Wikipedia)"
+    OUTPUT_FILE: str = "Data/Computed Features/club_chemistry_hhi.csv"
     TOP5_CODES: frozenset[str] = frozenset({"ENG", "ESP", "GER", "ITA", "FRA"})
     MIN_SQUAD: int = 15
 

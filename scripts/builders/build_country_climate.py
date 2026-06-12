@@ -20,11 +20,11 @@ from pathlib import Path
 class ClimateConfig:
     """Quellen, API-Endpunkte und Zielpfade."""
 
-    XG_DIR: str = "xG Tournament Data (StatsBomb Open Data)"
-    WC2026_SQUADS: str = "Tournament Squads (Wikipedia)/World Cup 2026.csv"
-    WEATHER_FILE: str = "Match Weather (Open-Meteo)/tournament_match_weather.csv"
-    CLIMATE_FILE: str = "Computed Features/country_climate.csv"
-    DISTANCE_FILE: str = "Computed Features/match_climate_distance.csv"
+    XG_DIR: str = "Data/xG Tournament Data (StatsBomb Open Data)"
+    WC2026_SQUADS: str = "Data/Tournament Squads (Wikipedia)/World Cup 2026.csv"
+    WEATHER_FILE: str = "Data/Match Weather (Open-Meteo)/tournament_match_weather.csv"
+    CLIMATE_FILE: str = "Data/Computed Features/country_climate.csv"
+    DISTANCE_FILE: str = "Data/Computed Features/match_climate_distance.csv"
 
     GEOCODE_URL: str = "https://geocoding-api.open-meteo.com/v1/search"
     ARCHIVE_URL: str = "https://archive-api.open-meteo.com/v1/archive"

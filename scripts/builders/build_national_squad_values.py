@@ -16,7 +16,7 @@ from pathlib import Path
 class SquadValueConfig:
     """Pfade und Aggregationsparameter."""
 
-    SOURCE_DIR: str = "Transfermarkt Market Values (player-scores)"
+    SOURCE_DIR: str = "Data/Transfermarkt Market Values (player-scores)"
     VALUATIONS_FILE: str = "player_valuations.csv"
     PLAYERS_FILE: str = "players.csv"
     OUTPUT_FILE: str = "national_squad_values.csv"

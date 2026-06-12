@@ -39,7 +39,7 @@ class OddsApiConfig:
     MARKETS: str = "h2h"
     ODDS_FORMAT: str = "decimal"
 
-    OUTPUT_DIR: str = "Live Odds Snapshots (The Odds API)"
+    OUTPUT_DIR: str = "Data/Live Odds Snapshots (The Odds API)"
     RAW_SUBDIR: str = "raw"
     LOG_FILE: str = "odds_log.csv"
     LOG_COLUMNS: tuple[str, ...] = (

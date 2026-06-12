@@ -21,7 +21,7 @@ class Fc26Config:
     )
     USER_AGENT: str = "Mozilla/5.0 (research)"
     TIMEOUT_SECONDS: int = 120
-    OUTPUT_DIR: str = "EA Sports FC Ratings (FIFA 15-24)/FC26"
+    OUTPUT_DIR: str = "Data/EA Sports FC Ratings (FIFA 15-24)/FC26"
 
 
 def main() -> None:

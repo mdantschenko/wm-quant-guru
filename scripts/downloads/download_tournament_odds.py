@@ -23,7 +23,7 @@ class TournamentOddsConfig:
     USER_AGENT: str = "Mozilla/5.0 (research; tournament-odds downloader)"
     TIMEOUT_SECONDS: int = 40
     POLITE_DELAY_SECONDS: float = 1.0
-    OUTPUT_DIR: str = "Tournament Odds (FootyStats)"
+    OUTPUT_DIR: str = "Data/Tournament Odds (FootyStats)"
     ODDS_HEADER_MARKER: str = "odds_ft_home_team_win"
 
     # Beschrifteter Dateiname -> FootyStats-Wettbewerbs-ID.

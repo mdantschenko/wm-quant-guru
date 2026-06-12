@@ -25,8 +25,8 @@ class GdeltConfig:
     QUERY_TEMPLATE: str = '"{team} national team" sourcelang:eng'
     RATE_LIMIT_SECONDS: float = 5.2
     TIMEOUT_SECONDS: int = 40
-    TEAMS_FILE: str = "World Cup 2026 (FootyStats)/teams.csv"
-    OUTPUT_FILE: str = "Alternative Data (GDELT News Tone)/gdelt_news_teams.csv"
+    TEAMS_FILE: str = "Data/World Cup 2026 (FootyStats)/teams.csv"
+    OUTPUT_FILE: str = "Data/Alternative Data (GDELT News Tone)/gdelt_news_teams.csv"
 
 
 def api_series(query: str, mode: str, config: GdeltConfig) -> dict[str, float]:

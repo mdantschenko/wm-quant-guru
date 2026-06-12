@@ -25,7 +25,7 @@ class StatsBombConfig:
     USER_AGENT: str = "wm-quant-guru (research)"
     TIMEOUT_SECONDS: int = 60
     POLITE_DELAY_SECONDS: float = 0.2
-    OUTPUT_DIR: str = "xG Tournament Data (StatsBomb Open Data)"
+    OUTPUT_DIR: str = "Data/xG Tournament Data (StatsBomb Open Data)"
 
     # Beschrifteter Dateiname -> (competition_id, season_id) laut
     # competitions.json des Open-Data-Repos.

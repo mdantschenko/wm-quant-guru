@@ -13,8 +13,8 @@ from pathlib import Path
 class RefereeConfig:
     """Quellen und Zielpfad."""
 
-    SOURCE_DIR: str = "Tournament Odds (FootyStats)"
-    OUTPUT_FILE: str = "Computed Features/referee_profiles.csv"
+    SOURCE_DIR: str = "Data/Tournament Odds (FootyStats)"
+    OUTPUT_FILE: str = "Data/Computed Features/referee_profiles.csv"
 
 
 def to_int(value: str | None) -> int:

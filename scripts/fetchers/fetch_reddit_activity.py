@@ -35,8 +35,8 @@ class RedditConfig:
     TIMEOUT_SECONDS: int = 40
     POLITE_DELAY_SECONDS: float = 1.0
     USER_AGENT: str = "wm-quant-guru/1.0 (research; attention history)"
-    TEAMS_FILE: str = "World Cup 2026 (FootyStats)/teams.csv"
-    LOG_FILE: str = "Alternative Data (Reddit)/reddit_activity_log.csv"
+    TEAMS_FILE: str = "Data/World Cup 2026 (FootyStats)/teams.csv"
+    LOG_FILE: str = "Data/Alternative Data (Reddit)/reddit_activity_log.csv"
 
 
 def team_names(config: RedditConfig) -> list[str]:
@@ -85,8 +85,9 @@ def main() -> None:
     with target.open("a", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         if is_new:
-            writer.writerow(["fetched_at_utc", "team", "window_days",
-                             "n_submissions", "avg_score", "max_score"])
+            writer.writerow(["fetched_at_utc", "team", "window_start",
+                             "window_end", "n_submissions", "avg_score",
+                             "max_score"])
         for team in team_names(config):
             submissions = fetch_submissions(team, config)
             time.sleep(config.POLITE_DELAY_SECONDS)
@@ -95,7 +96,8 @@ def main() -> None:
                 continue
             scores = [int(s.get("score") or 0) for s in submissions]
             writer.writerow(
-                [fetched_at, team, config.WINDOW_DAYS, len(scores),
+                [fetched_at, team, config.WINDOW_START, config.WINDOW_END,
+                 len(scores),
                  round(sum(scores) / len(scores), 1) if scores else 0,
                  max(scores) if scores else 0]
             )

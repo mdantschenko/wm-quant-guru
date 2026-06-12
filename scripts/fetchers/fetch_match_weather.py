@@ -21,8 +21,8 @@ from pathlib import Path
 class WeatherConfig:
     """Quelle, Stadion-Koordinaten und Zielpfad."""
 
-    SOURCE_DIR: str = "xG Tournament Data (StatsBomb Open Data)"
-    OUTPUT_DIR: str = "Match Weather (Open-Meteo)"
+    SOURCE_DIR: str = "Data/xG Tournament Data (StatsBomb Open Data)"
+    OUTPUT_DIR: str = "Data/Match Weather (Open-Meteo)"
     OUTPUT_FILE: str = "tournament_match_weather.csv"
     API_URL: str = "https://archive-api.open-meteo.com/v1/archive"
     HOURLY_VARS: str = "temperature_2m,relative_humidity_2m,apparent_temperature"

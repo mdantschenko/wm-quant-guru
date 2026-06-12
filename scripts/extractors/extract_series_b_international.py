@@ -17,10 +17,10 @@ from pathlib import Path
 class SeriesBConfig:
     """Pfade, Filter und Strukturkonstanten der Serie B."""
 
-    SOURCE_DIR: str = "Beat The Bookie Odds Series Football Dataset"
+    SOURCE_DIR: str = "Data/Beat The Bookie Odds Series Football Dataset"
     MATCHES_GZ: str = "odds_series_b_matches.csv.gz"
     SERIES_GZ: str = "odds_series_b.csv.gz"
-    OUTPUT_DIR: str = "International & Tournament Odds (Beat The Bookie 2005-2015)"
+    OUTPUT_DIR: str = "Data/International & Tournament Odds (Beat The Bookie 2005-2015)"
     OUTPUT_FILE: str = "international_open_close_odds_2016.csv"
 
     OUTCOMES: tuple[str, ...] = ("home", "draw", "away")

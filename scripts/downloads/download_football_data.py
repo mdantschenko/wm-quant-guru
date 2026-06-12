@@ -29,7 +29,7 @@ class FootballDataConfig:
     FIRST_SEASON_START: int = 2000
     LAST_SEASON_START: int = 2024
 
-    OUTPUT_ROOT: str = "Football Betting Odds (football-data.co.uk)"
+    OUTPUT_ROOT: str = "Data/Football Betting Odds (football-data.co.uk)"
 
     # Hauptligen: Kürzel -> beschrifteter Ordnername (Saison-Einzeldateien).
     MAIN_LEAGUES: dict[str, str] = {

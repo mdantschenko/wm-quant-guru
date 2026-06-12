@@ -35,8 +35,8 @@ class PageviewsConfig:
     POLITE_DELAY_SECONDS: float = 0.25  # REST-API drosselt Bursts (429)
     RETRY_WAIT_SECONDS: float = 3.0
 
-    TEAMS_FILE: str = "World Cup 2026 (FootyStats)/teams.csv"
-    OUTPUT_DIR: str = "Alternative Data (Wikipedia Pageviews)"
+    TEAMS_FILE: str = "Data/World Cup 2026 (FootyStats)/teams.csv"
+    OUTPUT_DIR: str = "Data/Alternative Data (Wikipedia Pageviews)"
     TEAM_START: str = "20180101"
     PLAYER_START: str = "20250101"
 
@@ -108,23 +108,36 @@ def squad_player_articles(config: PageviewsConfig) -> list[tuple[str, str]]:
     return pairs
 
 
-def write_series(
+def existing_keys(target: Path, column: str) -> set[str]:
+    """Bereits geladene Schluessel (Team/Artikel) einer Ausgabe-CSV."""
+    if not target.exists():
+        return set()
+    with target.open(encoding="utf-8", newline="") as handle:
+        return {row[column] for row in csv.DictReader(handle)}
+
+
+def append_series(
     target: Path, rows: list[list[object]], header: list[str]
 ) -> None:
-    """Schreibe eine Pageview-Zeitreihen-CSV."""
+    """Haenge Zeitreihen-Zeilen an eine CSV an (Header nur bei Neuanlage)."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", encoding="utf-8", newline="") as handle:
+    is_new = not target.exists()
+    with target.open("a", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(header)
+        if is_new:
+            writer.writerow(header)
         writer.writerows(rows)
 
 
 def main() -> None:
-    """Hole Team- und Spieler-Pageviews und schreibe zwei CSVs."""
+    """Hole Team- und Spieler-Pageviews (resumierbar: vorhandene skippen)."""
     config = PageviewsConfig()
     end = date.today().strftime("%Y%m%d")
     output_dir = Path(config.OUTPUT_DIR)
+    header = ["team", "article", "date", "views"]
 
+    teams_target = output_dir / "wikipedia_pageviews_teams.csv"
+    done_teams = existing_keys(teams_target, "team")
     team_rows: list[list[object]] = []
     missing = 0
     with Path(config.TEAMS_FILE).open(encoding="utf-8", newline="") as handle:
@@ -132,6 +145,8 @@ def main() -> None:
             {clean_team_name(row["team_name"]) for row in csv.DictReader(handle)}
         )
     for team in teams:
+        if team in done_teams:
+            continue
         article = config.TEAM_TITLE_OVERRIDES.get(
             team, f"{team} national football team"
         )
@@ -142,15 +157,19 @@ def main() -> None:
             print(f"  SKIP Team {team} ({article})")
             continue
         team_rows.extend([team, article, day, views] for day, views in series)
-    write_series(
-        output_dir / "wikipedia_pageviews_teams.csv", team_rows,
-        ["team", "article", "date", "views"],
-    )
-    print(f"Teams: {len(team_rows)} Tageswerte ({missing} fehlend)", flush=True)
+    append_series(teams_target, team_rows, header)
+    print(f"Teams: +{len(team_rows)} Tageswerte ({missing} fehlend, "
+          f"{len(done_teams)} bereits vorhanden)", flush=True)
 
+    players_target = output_dir / "wikipedia_pageviews_players.csv"
+    done_articles = existing_keys(players_target, "article")
     player_rows: list[list[object]] = []
     missing = 0
-    players = squad_player_articles(config)
+    players = [
+        (team, article)
+        for team, article in squad_player_articles(config)
+        if article not in done_articles
+    ]
     for index, (team, article) in enumerate(players, start=1):
         series = daily_views(article, config.PLAYER_START, end, config)
         time.sleep(config.POLITE_DELAY_SECONDS)
@@ -162,11 +181,9 @@ def main() -> None:
         )
         if index % 100 == 0:
             print(f"  ... {index}/{len(players)} Spieler", flush=True)
-    write_series(
-        output_dir / "wikipedia_pageviews_players.csv", player_rows,
-        ["team", "article", "date", "views"],
-    )
-    print(f"Spieler: {len(player_rows)} Tageswerte ({missing} ohne Artikel)")
+    append_series(players_target, player_rows, header)
+    print(f"Spieler: +{len(player_rows)} Tageswerte ({missing} fehlend/ohne "
+          f"Artikel, {len(done_articles)} bereits vorhanden)")
 
 
 if __name__ == "__main__":

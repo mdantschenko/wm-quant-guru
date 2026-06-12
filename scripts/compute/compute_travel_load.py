@@ -18,8 +18,8 @@ from scripts.fetchers.fetch_match_weather import WeatherConfig, locate_stadium
 class TravelConfig:
     """Quellen und Zielpfad."""
 
-    SOURCE_DIR: str = "xG Tournament Data (StatsBomb Open Data)"
-    OUTPUT_FILE: str = "Computed Features/travel_load.csv"
+    SOURCE_DIR: str = "Data/xG Tournament Data (StatsBomb Open Data)"
+    OUTPUT_FILE: str = "Data/Computed Features/travel_load.csv"
 
 
 def haversine_km(

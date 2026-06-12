@@ -26,7 +26,7 @@ class RatingsConfig:
     )
     USER_AGENT: str = "Mozilla/5.0 (research; ratings downloader)"
     TIMEOUT_SECONDS: int = 300
-    OUTPUT_DIR: str = "EA Sports FC Ratings (FIFA 15-24)"
+    OUTPUT_DIR: str = "Data/EA Sports FC Ratings (FIFA 15-24)"
     FILE_NAME: str = "male_players.csv"
 
 

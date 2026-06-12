@@ -18,7 +18,7 @@ from scripts.downloads.download_wikipedia_squads import WikiSquadsConfig, fetch_
 class CoachConfig:
     """Zielpfad (Quellen kommen aus WikiSquadsConfig)."""
 
-    OUTPUT_FILE: str = "Tournament Squads (Wikipedia)/coaches.csv"
+    OUTPUT_FILE: str = "Data/Tournament Squads (Wikipedia)/coaches.csv"
 
 
 def parse_coaches(wikitext: str) -> list[tuple[str, str, str]]:

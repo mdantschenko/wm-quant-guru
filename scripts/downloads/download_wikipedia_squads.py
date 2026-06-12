@@ -29,7 +29,7 @@ class WikiSquadsConfig:
     USER_AGENT: str = "wm-quant-guru/1.0 (research; squad parser)"
     TIMEOUT_SECONDS: int = 60
     POLITE_DELAY_SECONDS: float = 0.5
-    OUTPUT_DIR: str = "Tournament Squads (Wikipedia)"
+    OUTPUT_DIR: str = "Data/Tournament Squads (Wikipedia)"
 
     # Beschrifteter Dateiname -> Wikipedia-Seitentitel.
     PAGES: dict[str, str] = {

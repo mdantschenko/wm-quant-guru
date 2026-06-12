@@ -23,7 +23,7 @@ class SquadsConfig:
     USER_AGENT: str = "Mozilla/5.0 (research; squads downloader)"
     TIMEOUT_SECONDS: int = 40
     POLITE_DELAY_SECONDS: float = 1.0
-    OUTPUT_DIR: str = "Tournament Squads (FootyStats)"
+    OUTPUT_DIR: str = "Data/Tournament Squads (FootyStats)"
     HEADER_MARKER: str = "full_name"
 
     COMPETITIONS: dict[str, int] = {

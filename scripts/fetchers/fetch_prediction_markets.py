@@ -26,7 +26,7 @@ class PredictionMarketConfig:
     TITLE_FILTER: str = "world cup"
     TIMEOUT_SECONDS: int = 30
     POLITE_DELAY_SECONDS: float = 0.5
-    LOG_FILE: str = "Alternative Data (Prediction Markets)/prediction_markets_log.csv"
+    LOG_FILE: str = "Data/Alternative Data (Prediction Markets)/prediction_markets_log.csv"
 
 
 def api_json(url: str, config: PredictionMarketConfig) -> object | None:

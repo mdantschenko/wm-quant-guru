@@ -20,7 +20,7 @@ class EloConfig:
     TEAMS_URL: str = "https://eloratings.net/en.teams.tsv"
     USER_AGENT: str = "Mozilla/5.0 (research)"
     TIMEOUT_SECONDS: int = 30
-    OUTPUT_DIR: str = "International Football Elo Ratings (1872-2025)/current"
+    OUTPUT_DIR: str = "Data/International Football Elo Ratings (1872-2025)/current"
 
 
 def fetch_lines(url: str, config: EloConfig) -> list[str]:

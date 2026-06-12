@@ -14,9 +14,9 @@ from pathlib import Path
 class CoverageConfig:
     """Pfade und zu prüfende Quotenspalten."""
 
-    MAIN_DIR: str = "Football Betting Odds (football-data.co.uk)/main_leagues"
+    MAIN_DIR: str = "Data/Football Betting Odds (football-data.co.uk)/main_leagues"
     REPORT_PATH: str = (
-        "Football Betting Odds (football-data.co.uk)/coverage_report.csv"
+        "Data/Football Betting Odds (football-data.co.uk)/coverage_report.csv"
     )
     MIN_FILL_RATE: float = 0.5  # ab hier gilt eine Spalte als "vorhanden"
 

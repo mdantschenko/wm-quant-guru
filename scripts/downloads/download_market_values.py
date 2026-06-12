@@ -22,7 +22,7 @@ class MarketValueConfig:
     USER_AGENT: str = "Mozilla/5.0 (research; market-value downloader)"
     TIMEOUT_SECONDS: int = 300
     POLITE_DELAY_SECONDS: float = 1.0
-    OUTPUT_DIR: str = "Transfermarkt Market Values (player-scores)"
+    OUTPUT_DIR: str = "Data/Transfermarkt Market Values (player-scores)"
     # appearances.csv: Minuten je Spieler und Vereinsspiel (Spielerbelastung).
     FILES: tuple[str, ...] = ("player_valuations.csv", "players.csv", "appearances.csv")
 
