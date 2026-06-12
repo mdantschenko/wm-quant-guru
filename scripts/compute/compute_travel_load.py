@@ -12,7 +12,7 @@ import csv
 import math
 from pathlib import Path
 
-from fetch_match_weather import WeatherConfig, locate_stadium
+from scripts.fetchers.fetch_match_weather import WeatherConfig, locate_stadium
 
 
 class TravelConfig:

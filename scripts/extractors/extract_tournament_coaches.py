@@ -12,7 +12,7 @@ import re
 import time
 from pathlib import Path
 
-from download_wikipedia_squads import WikiSquadsConfig, fetch_wikitext, strip_link
+from scripts.downloads.download_wikipedia_squads import WikiSquadsConfig, fetch_wikitext, strip_link
 
 
 class CoachConfig:
