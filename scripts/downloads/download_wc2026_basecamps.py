@@ -43,22 +43,37 @@ def basecamp_section(wikitext: str) -> str:
     return match.group(1) if match else ""
 
 
-def parse_rows(section: str) -> list[tuple[str, str]]:
-    """(team, basecamp_ort) aus Tabellen-/Listenzeilen des Abschnitts."""
-    rows: list[tuple[str, str]] = []
+def clean_cell(raw: str) -> str:
+    """Tabellenzelle säubern: Refs, Templates, Links, Markup entfernen."""
+    text = re.sub(r"<ref[^>]*/>|<ref[^>]*>.*?</ref>", "", raw, flags=re.DOTALL)
+    text = re.sub(r"\{\{[^{}]*\}\}", "", text)
+    return strip_links(text).strip(" |–-–")
+
+
+def parse_rows(section: str) -> list[tuple[str, str, str]]:
+    """(team_code, unterkunft, trainingsgelaende) aus der Basecamp-Tabelle.
+
+    Format je Team: eine Zeile ``|{{#invoke:flagg|...|ALG|avar=fb}}<ref...``
+    (FIFA-Dreiercode), gefolgt von zwei Zellen-Zeilen (Hotel, Training).
+    """
+    rows: list[tuple[str, str, str]] = []
+    code = ""
+    cells: list[str] = []
     for line in section.splitlines():
-        flag = re.search(r"\{\{(?:fb|flagicon)\|([A-Za-z ]{2,20})\}\}", line)
-        if not flag:
+        flag = re.search(r"\{\{#invoke:flagg\|[^}]*?\|([A-Z]{3})\b", line)
+        if flag:
+            if code and cells:
+                rows.append((code, cells[0], cells[1] if len(cells) > 1 else ""))
+            code, cells = flag.group(1), []
             continue
-        rest = line[flag.end():]
-        location = strip_links(
-            re.sub(r"\{\{[^}]*\}\}|<[^>]+>|^[|;:*\s]+", "", rest)
-        ).strip(" |–-")
-        team = strip_links(line[:flag.end()])
-        team_link = re.search(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", line)
-        team_name = team_link.group(1) if team_link else flag.group(1)
-        if location:
-            rows.append((team_name.strip(), location))
+        if line.startswith("|-") or line.startswith("|}"):
+            continue
+        if code and line.startswith("|"):
+            cell = clean_cell(line)
+            if cell:
+                cells.append(cell)
+    if code and cells:
+        rows.append((code, cells[0], cells[1] if len(cells) > 1 else ""))
     return rows
 
 
@@ -75,7 +90,7 @@ def main() -> None:
     target = Path(config.OUTPUT_FILE)
     with target.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["team", "base_camp"])
+        writer.writerow(["team_code", "accommodation", "training_site"])
         writer.writerows(sorted(rows))
     print(f"{len(rows)} Basecamps -> {target}")
 

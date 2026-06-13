@@ -38,7 +38,19 @@ def api_series(query: str, mode: str, config: GdeltConfig) -> dict[str, float]:
     request = urllib.request.Request(url, headers={"User-Agent": "wm-quant-guru"})
     try:
         with urllib.request.urlopen(request, timeout=config.TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read())
+            raw = response.read()
+    except Exception:
+        return {}
+    if raw.lstrip()[:1] not in (b"{", b"["):
+        # GDELT liefert bei Drosselung Klartext statt JSON -- dann ist
+        # die IP im (mehrstuendigen) Cooldown: sofort sauber abbrechen
+        # statt 96 leere Serien zu schreiben.
+        raise SystemExit(
+            "GDELT drosselt diese IP weiterhin (Klartext-Antwort). "
+            "Mehrere Stunden warten und erneut ausfuehren."
+        )
+    try:
+        payload = json.loads(raw)
     except Exception:
         return {}
     series: dict[str, float] = {}

@@ -44,8 +44,16 @@ class ExtractConfig:
 
 
 def is_senior_national(league: str, config: ExtractConfig) -> bool:
-    """Prüfe via exaktem Wettbewerbsnamen, ob Senior-Männer-Nationalspiel."""
+    """Prüfe via exaktem Wettbewerbsnamen, ob Senior-Männer-Nationalspiel.
+
+    Akzente werden normalisiert ("Copa América" -> "copa america").
+    """
+    import unicodedata
     competition = league.split(":", 1)[-1].strip().lower()
+    competition = "".join(
+        ch for ch in unicodedata.normalize("NFKD", competition)
+        if not unicodedata.combining(ch)
+    )
     return competition in config.INCLUDE_COMPETITIONS
 
 

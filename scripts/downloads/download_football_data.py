@@ -26,8 +26,8 @@ class FootballDataConfig:
     TIMEOUT_SECONDS: int = 30
     POLITE_DELAY_SECONDS: float = 0.5
 
-    FIRST_SEASON_START: int = 2000
-    LAST_SEASON_START: int = 2024
+    FIRST_SEASON_START: int = 1993  # aelteste football-data-Saison (93/94)
+    LAST_SEASON_START: int = 2025   # laufende Saison 2025/26
 
     OUTPUT_ROOT: str = "Data/Football Betting Odds (football-data.co.uk)"
 

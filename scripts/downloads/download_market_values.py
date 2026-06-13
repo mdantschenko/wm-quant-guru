@@ -23,8 +23,14 @@ class MarketValueConfig:
     TIMEOUT_SECONDS: int = 300
     POLITE_DELAY_SECONDS: float = 1.0
     OUTPUT_DIR: str = "Data/Transfermarkt Market Values (player-scores)"
-    # appearances.csv: Minuten je Spieler und Vereinsspiel (Spielerbelastung).
-    FILES: tuple[str, ...] = ("player_valuations.csv", "players.csv", "appearances.csv")
+    # appearances: Minuten je Spieler/Vereinsspiel (Belastung);
+    # transfers: Wechsel inkl. Datum/Abloese (Kader-Unruhe vor Turnieren);
+    # games: Vereinsspiele inkl. Tabellenposition;
+    # game_lineups: Aufstellungen seit ~2012 inkl. Kapitaens-Flag.
+    FILES: tuple[str, ...] = (
+        "player_valuations.csv", "players.csv", "appearances.csv",
+        "transfers.csv", "games.csv", "game_lineups.csv",
+    )
 
 
 def fetch_file(file_name: str, config: MarketValueConfig) -> bytes | None:
