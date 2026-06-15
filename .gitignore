@@ -1,8 +1,9 @@
 kaggle.json
 
-kritische_analyse.*
-konzept.*
+docs/*
 !konzept.pdf
+!shared_poisson_components_simulation.py
+!copula_simulation.py
 
 .claude
 CLAUDE.md
