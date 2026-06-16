@@ -1,99 +1,75 @@
-"""Quantifiziert den Favorite-Longshot-Bias an den Quotenextremen.
+"""Favorite-Longshot-Bias je Spiel und je Favoritenband ueber ALLE Quotenquellen.
 
-Die Idee hinter \"uberschaetzten Quoten bei sehr guten gegen sehr schlechte
-Mannschaften wird hier empirisch gepr\"uft. Aus allen Spielen mit
-1X2-Quoten wird je Spiel die entvigte Wahrscheinlichkeit des Favoriten
-bestimmt (Favorit = Ausgang mit der niedrigsten Quote) und mit der
-tats\"achlichen Eintrittsh\"aufigkeit verglichen. Je Favoritenband ergeben
-sich:
-  - die mittlere implizite Favoritenwahrscheinlichkeit,
-  - die tats\"achliche Siegquote des Favoriten,
-  - die Kalibrierungsl\"ucke (implizit minus tats\"achlich); positiv heisst
-    der Markt \"ubersch\"atzt den Favoriten,
-  - der Flat-Stake-ROI f\"ur das Backen des Favoriten bzw. des Aussenseiters
-    (zeigt, ob an den Extremen ein Vorteil liegt).
+Pro Spiel mit 1X2-Quoten werden die entvigte Favoritenwahrscheinlichkeit
+(Favorit = niedrigste Quote) und der tatsaechliche Ausgang gegenuebergestellt.
+Ausgaben nach Data/Custom_Data/:
+  - favorite_longshot_matches.csv  eine Zeile JE SPIEL (die Rohdaten) mit
+    entvigten Wahrscheinlichkeiten, Favorit, Ergebnis, Quote und Flat-Profit.
+  - favorite_longshot_bias.csv     Kalibrierung je Favoritenband (gesamt).
+  - favorite_longshot_bias_by_source.csv  dasselbe je Quelle.
 
-Quelle football-data.co.uk (Vereinsligen, viele Extrempaarungen). Pro Spiel
-werden die sch\"arfsten verf\"ugbaren Quoten genutzt (Pinnacle-Closing vor
-Pinnacle-Open vor Bet365 vor Durchschnitt). Reine Standardbibliothek.
+Quellen (jeweils mit eigener Spalte `source`):
+  - football-data.co.uk (Vereinsligen, schaerfste Quote je Spiel),
+  - Club Football Engineered (Vereinsligen, ueberlappt football-data stark),
+  - FootyStats International und Turnier (Nationalteams, fuer die WM relevant),
+  - Beat The Bookie International (Nationalteams 2005-2015, Closing).
+Reine Standardbibliothek.
 """
 from __future__ import annotations
 
 import csv
+from itertools import chain
 from pathlib import Path
+from typing import Iterator
+
+from scripts.helpers.dates import to_iso_date
 
 
 class BiasConfig:
-    """Pfade, Quotenquellen-Priorit\"at und Bandgrenzen."""
+    """Pfade, Quotenspalten und Bandgrenzen."""
 
-    SOURCE_DIR: str = "Data/Football Betting Odds (football-data.co.uk)"
+    FOOTBALL_DATA_DIR: str = "Data/Football Betting Odds (football-data.co.uk)"
+    CLUB_ENGINEERED_FILE: str = "Data/Club Football Engineered (2000-2025)/Matches.csv"
+    FOOTYSTATS_DIRS: tuple[str, ...] = (
+        "Data/International Matches & Odds (FootyStats)",
+        "Data/Tournament Odds (FootyStats)",
+    )
+    BEAT_THE_BOOKIE_FILE: str = (
+        "Data/International & Tournament Odds (Beat The Bookie 2005-2015)/"
+        "international_closing_odds.csv"
+    )
     OUTPUT_DIR: str = "Data/Custom_Data"
 
-    # (Heim, Remis, Gast), schaerfste Quelle zuerst.
-    ODDS_SOURCES: tuple[tuple[str, str, str], ...] = (
-        ("PSCH", "PSCD", "PSCA"),
-        ("PSH", "PSD", "PSA"),
-        ("B365H", "B365D", "B365A"),
-        ("AvgH", "AvgD", "AvgA"),
+    FOOTBALL_DATA_ODDS: tuple[tuple[str, str, str], ...] = (
+        ("PSCH", "PSCD", "PSCA"), ("PSH", "PSD", "PSA"),
+        ("B365H", "B365D", "B365A"), ("AvgH", "AvgD", "AvgA"),
     )
     RESULT_LETTERS: tuple[str, str, str] = ("H", "D", "A")
-    # Feiner an den Extremen, denn dort sitzt die Aussage.
+    OUTCOME_NAMES: tuple[str, str, str] = ("home", "draw", "away")
     BAND_EDGES: tuple[float, ...] = (
         0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.90, 0.95, 1.0001,
     )
 
 
-def read_best_odds(
-    row: dict[str, str], config: BiasConfig
-) -> tuple[float, float, float] | None:
-    """Liefert das erste vollst\"andige, g\"ultige Quotentripel der Priorit\"at."""
-    for triple in config.ODDS_SOURCES:
-        try:
-            values = (float(row[triple[0]]), float(row[triple[1]]), float(row[triple[2]]))
-        except (KeyError, ValueError):
-            continue
-        if all(value > 1.0 for value in values):
-            return values
-    return None
+def valid_triple(values: tuple[float, float, float]) -> bool:
+    return all(value > 1.0 for value in values)
 
 
 def band_of(probability: float, config: BiasConfig) -> str | None:
-    """Ordnet die Favoritenwahrscheinlichkeit einem Band zu."""
     for lower, upper in zip(config.BAND_EDGES[:-1], config.BAND_EDGES[1:]):
         if lower <= probability < upper:
             return f"{lower:.2f}_{min(upper, 1.0):.2f}"
     return None
 
 
-def empty_bucket() -> dict[str, float]:
-    return {
-        "matches": 0.0,
-        "implied_sum": 0.0,
-        "favorite_wins": 0.0,
-        "favorite_profit": 0.0,
-        "longshot_profit": 0.0,
-    }
+def make_record(source: str, date: str, competition: str, home: str, away: str,
+                result_index: int, odds: tuple[float, float, float]) -> dict[str, object]:
+    return {"source": source, "date": date, "competition": competition,
+            "home": home, "away": away, "result_index": result_index, "odds": odds}
 
 
-def accumulate(
-    bucket: dict[str, float],
-    implied_favorite: float,
-    favorite_won: float,
-    favorite_odds: float,
-    longshot_won: float,
-    longshot_odds: float,
-) -> None:
-    bucket["matches"] += 1.0
-    bucket["implied_sum"] += implied_favorite
-    bucket["favorite_wins"] += favorite_won
-    bucket["favorite_profit"] += favorite_odds * favorite_won - 1.0
-    bucket["longshot_profit"] += longshot_odds * longshot_won - 1.0
-
-
-def collect_buckets(config: BiasConfig) -> dict[str, dict[str, float]]:
-    """Aggregiert alle Spiele je Favoritenband und einen Gesamteintrag."""
-    buckets: dict[str, dict[str, float]] = {"all": empty_bucket()}
-    for path in sorted(Path(config.SOURCE_DIR).rglob("*.csv")):
+def iter_football_data(config: BiasConfig) -> Iterator[dict[str, object]]:
+    for path in sorted(Path(config.FOOTBALL_DATA_DIR).rglob("*.csv")):
         if path.name == "coverage_report.csv":
             continue
         with open(path, encoding="utf-8", errors="ignore", newline="") as handle:
@@ -101,48 +77,120 @@ def collect_buckets(config: BiasConfig) -> dict[str, dict[str, float]]:
                 result = row.get("FTR", "")
                 if result not in config.RESULT_LETTERS:
                     continue
-                odds = read_best_odds(row, config)
+                odds = _best_football_data_odds(row, config)
                 if odds is None:
                     continue
-                inverse = [1.0 / value for value in odds]
-                overround = sum(inverse)
-                implied = [value / overround for value in inverse]
-                favorite_index = min(range(3), key=lambda k: odds[k])
-                longshot_index = max(range(3), key=lambda k: odds[k])
-                band = band_of(implied[favorite_index], config)
-                if band is None:
-                    continue
-                favorite_won = 1.0 if result == config.RESULT_LETTERS[favorite_index] else 0.0
-                longshot_won = 1.0 if result == config.RESULT_LETTERS[longshot_index] else 0.0
-                for key in (band, "all"):
-                    accumulate(
-                        buckets.setdefault(key, empty_bucket()),
-                        implied[favorite_index], favorite_won, odds[favorite_index],
-                        longshot_won, odds[longshot_index],
-                    )
-    return buckets
+                yield make_record("football-data", row.get("Date", ""), path.parent.name,
+                                  row.get("HomeTeam", ""), row.get("AwayTeam", ""),
+                                  config.RESULT_LETTERS.index(result), odds)
 
 
-def build_rows(buckets: dict[str, dict[str, float]]) -> list[dict[str, object]]:
-    """Bildet je Band die Kalibrierungs- und ROI-Kennzahlen."""
-    rows: list[dict[str, object]] = []
-    ordered = [key for key in sorted(buckets) if key != "all"] + ["all"]
-    for band in ordered:
-        bucket = buckets[band]
-        count = bucket["matches"]
-        if count == 0:
+def _best_football_data_odds(
+    row: dict[str, str], config: BiasConfig
+) -> tuple[float, float, float] | None:
+    for triple in config.FOOTBALL_DATA_ODDS:
+        try:
+            values = (float(row[triple[0]]), float(row[triple[1]]), float(row[triple[2]]))
+        except (KeyError, ValueError):
             continue
+        if valid_triple(values):
+            return values
+    return None
+
+
+def iter_club_engineered(config: BiasConfig) -> Iterator[dict[str, object]]:
+    path = Path(config.CLUB_ENGINEERED_FILE)
+    if not path.exists():
+        return
+    with open(path, encoding="utf-8", errors="ignore", newline="") as handle:
+        for row in csv.DictReader(handle):
+            result = row.get("FTResult", "")
+            if result not in config.RESULT_LETTERS:
+                continue
+            try:
+                odds = (float(row["OddHome"]), float(row["OddDraw"]), float(row["OddAway"]))
+            except (KeyError, ValueError):
+                continue
+            if not valid_triple(odds):
+                continue
+            yield make_record("club-engineered", row.get("MatchDate", ""),
+                              row.get("Division", ""), row.get("HomeTeam", ""),
+                              row.get("AwayTeam", ""), config.RESULT_LETTERS.index(result), odds)
+
+
+def iter_footystats(config: BiasConfig) -> Iterator[dict[str, object]]:
+    for base in config.FOOTYSTATS_DIRS:
+        base_path = Path(base)
+        for path in sorted(base_path.rglob("*.csv")):
+            competition = path.stem if path.parent == base_path else path.parent.name
+            with open(path, encoding="utf-8", errors="ignore", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    if row.get("status") != "complete":
+                        continue
+                    try:
+                        home_goals = int(row["home_team_goal_count"])
+                        away_goals = int(row["away_team_goal_count"])
+                        odds = (float(row["odds_ft_home_team_win"]),
+                                float(row["odds_ft_draw"]),
+                                float(row["odds_ft_away_team_win"]))
+                    except (KeyError, ValueError):
+                        continue
+                    if not valid_triple(odds):
+                        continue
+                    result_index = 0 if home_goals > away_goals else (1 if home_goals == away_goals else 2)
+                    yield make_record("footystats", row.get("date_GMT", ""), competition,
+                                      row.get("home_team_name", ""), row.get("away_team_name", ""),
+                                      result_index, odds)
+
+
+def iter_beat_the_bookie(config: BiasConfig) -> Iterator[dict[str, object]]:
+    path = Path(config.BEAT_THE_BOOKIE_FILE)
+    if not path.exists():
+        return
+    with open(path, encoding="utf-8", errors="ignore", newline="") as handle:
+        for row in csv.DictReader(handle):
+            try:
+                home_score = int(row["home_score"])
+                away_score = int(row["away_score"])
+                odds = (float(row["avg_odds_home_win"]), float(row["avg_odds_draw"]),
+                        float(row["avg_odds_away_win"]))
+            except (KeyError, ValueError):
+                continue
+            if not valid_triple(odds):
+                continue
+            result_index = 0 if home_score > away_score else (1 if home_score == away_score else 2)
+            yield make_record("beat-the-bookie", row.get("match_date", ""),
+                              row.get("league", ""), row.get("home_team", ""),
+                              row.get("away_team", ""), result_index, odds)
+
+
+def empty_bucket() -> dict[str, float]:
+    return {"matches": 0.0, "implied_sum": 0.0, "favorite_wins": 0.0,
+            "favorite_profit": 0.0, "longshot_profit": 0.0}
+
+
+def summary_rows(bands: dict[str, dict[str, float]], config: BiasConfig,
+                 source: str | None = None) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    ordered = [key for key in sorted(bands) if key != "all"] + ["all"]
+    for band in ordered:
+        bucket = bands.get(band)
+        if not bucket or bucket["matches"] == 0:
+            continue
+        count = bucket["matches"]
         mean_implied = bucket["implied_sum"] / count
-        actual_rate = bucket["favorite_wins"] / count
-        rows.append({
+        actual = bucket["favorite_wins"] / count
+        row: dict[str, object] = {} if source is None else {"source": source}
+        row.update({
             "favorite_band": band,
             "matches": int(count),
             "mean_implied_fav": round(mean_implied, 4),
-            "actual_fav_winrate": round(actual_rate, 4),
-            "calibration_gap": round(mean_implied - actual_rate, 4),
+            "actual_fav_winrate": round(actual, 4),
+            "calibration_gap": round(mean_implied - actual, 4),
             "fav_flat_roi_pct": round(100.0 * bucket["favorite_profit"] / count, 2),
             "longshot_flat_roi_pct": round(100.0 * bucket["longshot_profit"] / count, 2),
         })
+        rows.append(row)
     return rows
 
 
@@ -158,16 +206,64 @@ def main() -> None:
     output_dir = Path(config.OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = build_rows(collect_buckets(config))
-    write_csv(
-        output_dir / "favorite_longshot_bias.csv",
-        rows,
-        ["favorite_band", "matches", "mean_implied_fav", "actual_fav_winrate",
-         "calibration_gap", "fav_flat_roi_pct", "longshot_flat_roi_pct"],
-    )
-    total = next((row for row in rows if row["favorite_band"] == "all"), None)
-    if total is not None:
-        print(f"  OK    {total['matches']} Spiele \"uber {len(rows) - 1} Favoritenb\"ander")
+    overall: dict[str, dict[str, float]] = {}
+    by_source: dict[str, dict[str, dict[str, float]]] = {}
+    match_fields = ["source", "date", "competition", "home", "away", "result",
+                    "odds_home", "odds_draw", "odds_away", "favorite", "implied_fav",
+                    "favorite_won", "favorite_odds", "favorite_band", "favorite_profit"]
+    match_rows: list[dict[str, object]] = []
+    sources = chain(iter_football_data(config), iter_club_engineered(config),
+                    iter_footystats(config), iter_beat_the_bookie(config))
+    for record in sources:
+        odds = record["odds"]
+        inverse = [1.0 / value for value in odds]
+        overround = sum(inverse)
+        implied = [value / overround for value in inverse]
+        favorite = min(range(3), key=lambda k: odds[k])
+        longshot = max(range(3), key=lambda k: odds[k])
+        band = band_of(implied[favorite], config)
+        if band is None:
+            continue
+        favorite_won = 1.0 if record["result_index"] == favorite else 0.0
+        longshot_won = 1.0 if record["result_index"] == longshot else 0.0
+        favorite_profit = odds[favorite] * favorite_won - 1.0
+        longshot_profit = odds[longshot] * longshot_won - 1.0
+        for scope in (overall, by_source.setdefault(record["source"], {})):
+            for key in (band, "all"):
+                bucket = scope.setdefault(key, empty_bucket())
+                bucket["matches"] += 1.0
+                bucket["implied_sum"] += implied[favorite]
+                bucket["favorite_wins"] += favorite_won
+                bucket["favorite_profit"] += favorite_profit
+                bucket["longshot_profit"] += longshot_profit
+        match_rows.append({
+            "source": record["source"], "date": to_iso_date(str(record["date"])),
+            "competition": record["competition"], "home": record["home"],
+            "away": record["away"], "result": config.RESULT_LETTERS[record["result_index"]],
+            "odds_home": odds[0], "odds_draw": odds[1], "odds_away": odds[2],
+            "favorite": config.OUTCOME_NAMES[favorite],
+            "implied_fav": round(implied[favorite], 4),
+            "favorite_won": int(favorite_won),
+            "favorite_odds": odds[favorite], "favorite_band": band,
+            "favorite_profit": round(favorite_profit, 4),
+        })
+    match_rows.sort(key=lambda row: (str(row["competition"]), str(row["date"]), str(row["home"])))
+    write_csv(output_dir / "favorite_longshot_matches.csv", match_rows, match_fields)
+    written = len(match_rows)
+
+    write_csv(output_dir / "favorite_longshot_bias.csv", summary_rows(overall, config),
+              ["favorite_band", "matches", "mean_implied_fav", "actual_fav_winrate",
+               "calibration_gap", "fav_flat_roi_pct", "longshot_flat_roi_pct"])
+    by_source_rows: list[dict[str, object]] = []
+    for source in sorted(by_source):
+        by_source_rows.extend(summary_rows(by_source[source], config, source=source))
+    write_csv(output_dir / "favorite_longshot_bias_by_source.csv", by_source_rows,
+              ["source", "favorite_band", "matches", "mean_implied_fav", "actual_fav_winrate",
+               "calibration_gap", "fav_flat_roi_pct", "longshot_flat_roi_pct"])
+
+    print(f"  OK    {written} Spiele (Rohdaten) -> favorite_longshot_matches.csv")
+    for source in sorted(by_source):
+        print(f"        {source}: {int(by_source[source]['all']['matches'])} Spiele")
 
 
 if __name__ == "__main__":
