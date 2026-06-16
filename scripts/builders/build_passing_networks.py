@@ -186,8 +186,8 @@ def stream_games(actions_path: Path, config: PassingConfig, context: dict) -> li
             buffer.append((
                 normalize_id(raw[column["team_id"]]),
                 normalize_id(raw[column["player_id"]]),
-                float(raw[column["start_x"]]), float(raw[column["start_y"]]),
-                float(raw[column["end_x"]]), float(raw[column["end_y"]]),
+                105.0 - float(raw[column["start_x"]]), float(raw[column["start_y"]]),
+                105.0 - float(raw[column["end_x"]]), float(raw[column["end_y"]]),
                 raw[column["type_name"]], raw[column["result_name"]],
             ))
         if buffer:
