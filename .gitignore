@@ -12,5 +12,9 @@ CLAUDE.md
 *.txt
 !README.txt
 
-Data/
+/Data/
+.pytest_cache
+.venv
+wmguru.egg-info
+__pycache__
 
