@@ -9,12 +9,15 @@ The FootyStats squad list is useless here, because its current club is the
 national team itself.
 """
 
-from collections import Counter
 from pathlib import Path
-from typing import Any
+
+import pandas as pd
 
 from wmguru.helpers.constant import SquadFeatureCalculation
-from wmguru.helpers.utils import CsvFile
+from wmguru.helpers.utils import CsvFile, DecimalRounder
+
+TEAM_KEYS = ["tournament", "team"]
+CLUB_KEYS = [*TEAM_KEYS, "club"]
 
 
 class SquadFeatureCalculator:
@@ -22,94 +25,116 @@ class SquadFeatureCalculator:
 
     def calculate_every_tournament(self) -> int:
         """Write the file and return how many team rows it holds."""
-        rows: list[list[Any]] = []
-        for squad_file in sorted(SquadFeatureCalculation.SQUAD_FOLDER.glob("*.csv")):
-            rows.extend(self.calculate_one_tournament(squad_file))
-
+        every_tournament = pd.concat(
+            [
+                self.calculate_one_tournament(squad_file)
+                for squad_file in sorted(
+                    SquadFeatureCalculation.SQUAD_FOLDER.glob("*.csv")
+                )
+            ],
+            ignore_index=True,
+        )
         output_file = CsvFile(
             SquadFeatureCalculation.OUTPUT_FILE, SquadFeatureCalculation.COLUMN_NAMES
         )
-        output_file.write_rows(rows)
-        print(f"{len(rows)} team and tournament rows -> {output_file.path}")
-        return len(rows)
+        output_file.write_table(every_tournament)
+        print(f"{len(every_tournament)} team and tournament rows -> {output_file.path}")
+        return len(every_tournament)
 
-    def calculate_one_tournament(self, squad_file: Path) -> list[list[Any]]:
+    def calculate_one_tournament(self, squad_file: Path) -> pd.DataFrame:
         """Calculate one row per team of one tournament."""
-        clubs_of_team, top_league_flags_of_team = self._read_squads(squad_file)
-        rows: list[list[Any]] = []
-        for team_name, clubs in sorted(clubs_of_team.items()):
-            if self._squad_list_is_incomplete(clubs):
-                continue
-            rows.append(
-                self._build_row(
-                    squad_file.stem,
-                    team_name,
-                    clubs,
-                    top_league_flags_of_team[team_name],
-                )
-            )
-        return rows
+        players = self._read_squads(squad_file)
+        per_club = self._count_the_players_of_every_club(players)
+        return self._describe_every_squad(players, per_club)
 
-    def _squad_list_is_incomplete(self, clubs: list[str]) -> bool:
-        """Return True when the squad list is too short to give a meaningful index."""
-        return len(clubs) < SquadFeatureCalculation.SMALLEST_USABLE_SQUAD
+    def _read_squads(self, squad_file: Path) -> pd.DataFrame:
+        """Read the club of every player, and whether it plays in a top league.
 
-    def _read_squads(
-        self, squad_file: Path
-    ) -> tuple[dict[str, list[str]], dict[str, list[bool]]]:
-        """Read the club of every player per team, and whether it is a top league."""
-        clubs_of_team: dict[str, list[str]] = {}
-        top_league_flags_of_team: dict[str, list[bool]] = {}
-        for player in CsvFile(squad_file).read_rows():
-            team_name = player[SquadFeatureCalculation.TEAM_COLUMN].strip()
-            club_name = player[SquadFeatureCalculation.CLUB_COLUMN].strip()
-            if not team_name or not club_name:
-                continue
-            clubs_of_team.setdefault(team_name, []).append(club_name)
-            top_league_flags_of_team.setdefault(team_name, []).append(
-                player[SquadFeatureCalculation.CLUB_COUNTRY_COLUMN].upper()
-                in SquadFeatureCalculation.TOP_FIVE_LEAGUE_CODES
-            )
-        return clubs_of_team, top_league_flags_of_team
-
-    def _build_row(
-        self,
-        tournament_name: str,
-        team_name: str,
-        clubs: list[str],
-        top_league_flags: list[bool],
-    ) -> list[Any]:
-        """Build one output row."""
-        players_per_club = Counter(clubs)
-        player_count = sum(players_per_club.values())
-        biggest_club, players_of_biggest_club = players_per_club.most_common(1)[0]
-        return [
-            tournament_name,
-            team_name,
-            player_count,
-            len(players_per_club),
-            self._herfindahl_index(players_per_club, player_count),
-            biggest_club,
-            self._as_share(players_of_biggest_club / player_count),
-            self._as_share(sum(top_league_flags) / len(top_league_flags)),
-        ]
-
-    def _herfindahl_index(
-        self, players_per_club: Counter[str], player_count: int
-    ) -> float:
-        """Add the squared club shares of one squad up.
-
-        One single club for the whole squad gives one, a squad spread evenly
-        over many clubs gives a value near zero.
+        Other files live in the same folder, so a file that names neither a
+        team nor a club is no squad list and is skipped.
         """
-        return round(
-            sum((players / player_count) ** 2 for players in players_per_club.values()),
-            SquadFeatureCalculation.INDEX_DECIMAL_PLACES,
+        squad_list = CsvFile(squad_file).read_table()
+        if not {
+            SquadFeatureCalculation.TEAM_COLUMN,
+            SquadFeatureCalculation.CLUB_COLUMN,
+        } <= set(squad_list.columns):
+            return pd.DataFrame(
+                columns=[*CLUB_KEYS, "plays_in_a_top_league"], dtype=object
+            )
+        team = squad_list[SquadFeatureCalculation.TEAM_COLUMN].str.strip()
+        club = squad_list[SquadFeatureCalculation.CLUB_COLUMN].str.strip()
+        named = squad_list.assign(
+            tournament=squad_file.stem,
+            team=team,
+            club=club,
+            plays_in_a_top_league=squad_list[
+                SquadFeatureCalculation.CLUB_COUNTRY_COLUMN
+            ]
+            .str.upper()
+            .isin(SquadFeatureCalculation.TOP_FIVE_LEAGUE_CODES),
+        )
+        return named[(team != "") & (club != "")].reset_index(drop=True)
+
+    def _count_the_players_of_every_club(self, players: pd.DataFrame) -> pd.DataFrame:
+        """Count how many players of a squad play for the same club.
+
+        The clubs keep the order they first turn up in the file, so the
+        biggest one of two equally big clubs is the one that was named first.
+        """
+        return (
+            players.rename_axis("row_in_the_file")
+            .reset_index()
+            .groupby(CLUB_KEYS, sort=False)
+            .agg(
+                players=("row_in_the_file", "size"),
+                first_named=("row_in_the_file", "min"),
+            )
+            .reset_index()
         )
 
-    def _as_share(self, share: float) -> float:
-        """Cut a share down to a readable number of digits."""
-        return round(share, SquadFeatureCalculation.SHARE_DECIMAL_PLACES)
+    def _describe_every_squad(
+        self, players: pd.DataFrame, per_club: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Sum every squad up, dropping the lists that are too short to judge."""
+        squad_size = per_club.groupby(TEAM_KEYS)["players"].transform("sum")
+        club_share = per_club["players"] / squad_size
+        shared = per_club.assign(
+            squad_size=squad_size, squared_club_share=club_share**2
+        )
+        summed = shared.groupby(TEAM_KEYS, sort=True).agg(
+            players=("squad_size", "first"),
+            clubs=("club", "size"),
+            club_concentration=("squared_club_share", "sum"),
+        )
+        biggest = self._biggest_club_of_every_squad(shared)
+        top_league_share = players.groupby(TEAM_KEYS, sort=True)[
+            "plays_in_a_top_league"
+        ].mean()
+
+        index_rounder = DecimalRounder(SquadFeatureCalculation.INDEX_DECIMAL_PLACES)
+        share_rounder = DecimalRounder(SquadFeatureCalculation.SHARE_DECIMAL_PLACES)
+        described = summed.assign(
+            club_concentration=index_rounder.round_every_value(
+                summed["club_concentration"]
+            ),
+            biggest_club=biggest["club"],
+            biggest_club_share=share_rounder.round_every_value(
+                biggest["players"] / summed["players"]
+            ),
+            top_five_league_share=share_rounder.round_every_value(top_league_share),
+        ).reset_index()
+        return described[
+            described["players"] >= SquadFeatureCalculation.SMALLEST_USABLE_SQUAD
+        ]
+
+    def _biggest_club_of_every_squad(self, per_club: pd.DataFrame) -> pd.DataFrame:
+        """Name the club that sends the most players, ties going to the first."""
+        most_players_first = per_club.sort_values(
+            [*TEAM_KEYS, "players", "first_named"],
+            ascending=[True, True, False, True],
+            kind="stable",
+        )
+        return most_players_first.groupby(TEAM_KEYS, sort=True).first()
 
 
 if __name__ == "__main__":

@@ -1,182 +1,276 @@
 """Tests for the canonical match dataset, the backbone every model learns on.
 
-The traps here are all in the source. A fixture carries the text NA where a
-score belongs, so a plain emptiness check reads the whole 2026 World Cup as a
-row of nil nil draws. Two sources date the same match one day apart. And two
-rows share a day and both team names, so the obvious identifier is not unique.
+The traps here are all in the source, and pandas adds one of its own. A
+fixture carries the text NA where a score belongs, which pandas reads as a
+missing value unless it is told not to, so the whole 2026 World Cup turns into
+rows that claim to be played. Two sources date the same match one day apart.
+And two rows share a day and both team names, so the obvious identifier is not
+unique.
 """
 
-from datetime import date
+import pandas as pd
 
 from wmguru.data.builders.canonical_match_builder import CanonicalMatchBuilder
 from wmguru.helpers.constant import CanonicalMatchDataset
 
 
-def make_result_row(
-    home_score: str = "2",
-    away_score: str = "1",
-    tournament: str = "Friendly",
-    home_team: str = "Germany",
-    away_team: str = "Brazil",
-    country: str = "Germany",
-    neutral: str = "FALSE",
-    match_date: str = "2018-06-17",
-) -> dict[str, str]:
-    """Build one row of the results file."""
-    return {
-        "date": match_date,
-        "home_team": home_team,
-        "away_team": away_team,
-        "home_score": home_score,
-        "away_score": away_score,
-        "tournament": tournament,
-        "city": "Munich",
-        "country": country,
-        "neutral": neutral,
+def make_results(**overrides: list[str]) -> pd.DataFrame:
+    """Build a small results table, one row unless a column says otherwise."""
+    columns = {
+        "date": ["2018-06-17"],
+        "home_team": ["Germany"],
+        "away_team": ["Brazil"],
+        "home_score": ["2"],
+        "away_score": ["1"],
+        "tournament": ["Friendly"],
+        "city": ["Munich"],
+        "country": ["Germany"],
+        "neutral": ["FALSE"],
     }
+    columns.update(overrides)
+    frame = pd.DataFrame(columns)
+    return frame.assign(
+        match_day=pd.to_datetime(frame["date"]),
+        team_pair=CanonicalMatchBuilder()._team_pair_of(
+            frame["home_team"], frame["away_team"]
+        ),
+    )
 
 
-def test_a_fixture_is_not_read_as_a_goalless_draw():
-    """The source writes NA, which is text, so an emptiness check misses it."""
+def make_other_table(
+    match_date: str, home_team: str, away_team: str, column: str, value: str
+) -> pd.DataFrame:
+    """Build a table to join onto the matches, in the shape the joiner wants."""
+    return pd.DataFrame(
+        {
+            "match_day": pd.to_datetime([match_date]),
+            "team_pair": CanonicalMatchBuilder()._team_pair_of(
+                pd.Series([home_team]), pd.Series([away_team])
+            ),
+            column: [value],
+        }
+    )
+
+
+def test_pandas_does_not_read_the_fixture_placeholder_as_a_missing_value():
+    """The source writes NA, which pandas takes for a missing value by default."""
+    results = pd.read_csv(
+        CanonicalMatchDataset.OUTPUT_FILE.parent.parent
+        / "International football results from 1872 to 2026"
+        / "results.csv",
+        dtype=str,
+        keep_default_na=False,
+        nrows=None,
+    )
+    fixtures = results[
+        results["home_score"] == CanonicalMatchDataset.UNPLAYED_SCORE_TEXT
+    ]
+
+    assert len(fixtures) == 72
+    assert set(fixtures["tournament"]) == {"FIFA World Cup"}
+
+
+def test_a_fixture_is_told_apart_from_a_played_match():
     builder = CanonicalMatchBuilder()
+    results = make_results(
+        date=["2018-06-17", "2026-06-11"],
+        home_team=["Germany", "Mexico"],
+        away_team=["Brazil", "Poland"],
+        home_score=["2", "NA"],
+        away_score=["1", "NA"],
+        tournament=["Friendly", "FIFA World Cup"],
+        city=["Munich", "Mexico City"],
+        country=["Germany", "Mexico"],
+        neutral=["FALSE", "FALSE"],
+    )
 
-    assert builder._was_played(make_result_row()) is True
-    assert builder._was_played(make_result_row("NA", "NA")) is False
+    built = builder._with_canonical_columns(
+        results.assign(shootout_winner=None, tournament_stage=None)
+    )
+
+    assert list(built["was_played"]) == [True, False]
 
 
 def test_a_real_goalless_draw_is_still_a_played_match():
-    assert CanonicalMatchBuilder()._was_played(make_result_row("0", "0")) is True
+    built = CanonicalMatchBuilder()._with_canonical_columns(
+        make_results(home_score=["0"], away_score=["0"]).assign(
+            shootout_winner=None, tournament_stage=None
+        )
+    )
+
+    assert bool(built["was_played"].iloc[0]) is True
 
 
 def test_two_matches_of_the_same_day_and_teams_get_two_identifiers():
     """The source holds two such rows, and one would overwrite the other."""
-    builder = CanonicalMatchBuilder()
-    used: set[str] = set()
+    results = make_results(
+        date=["2018-06-17", "2018-06-17"],
+        home_team=["Germany", "Germany"],
+        away_team=["Brazil", "Brazil"],
+        home_score=["2", "1"],
+        away_score=["1", "2"],
+        tournament=["Friendly", "Friendly"],
+        city=["Munich", "Munich"],
+        country=["Germany", "Germany"],
+        neutral=["FALSE", "FALSE"],
+    )
 
-    first = builder._identifier_of(make_result_row(), used)
-    second = builder._identifier_of(make_result_row(), used)
+    identifiers = list(
+        CanonicalMatchBuilder()._with_match_identifier(results)["match_id"]
+    )
 
-    assert first != second
-    assert first == "2018-06-17|Germany|Brazil"
-    assert second.startswith(first)
-
-
-def test_the_identifier_says_which_match_it_is():
-    used: set[str] = set()
-
-    identifier = CanonicalMatchBuilder()._identifier_of(make_result_row(), used)
-
-    assert identifier == "2018-06-17|Germany|Brazil"
+    assert identifiers == ["2018-06-17|Germany|Brazil", "2018-06-17|Germany|Brazil#2"]
 
 
 def test_a_match_is_found_although_the_sources_date_it_one_day_apart():
     """A late kick off in the Americas is dated one day on in UTC."""
     builder = CanonicalMatchBuilder()
-    stage_of_match = {
-        (date(2024, 6, 21), frozenset(("Argentina", "Canada"))): "Group Stage"
-    }
-    row = make_result_row(
-        home_team="Argentina", away_team="Canada", match_date="2024-06-20"
+    results = builder._with_match_identifier(
+        make_results(date=["2024-06-20"], home_team=["Argentina"], away_team=["Canada"])
+    )
+    stages = make_other_table(
+        "2024-06-21", "Argentina", "Canada", "tournament_stage", "Group Stage"
     )
 
-    assert builder._looked_up(row, stage_of_match, "unknown") == "Group Stage"
+    joined = builder._joined_with(results, stages)
+
+    assert joined["tournament_stage"].iloc[0] == "Group Stage"
 
 
 def test_a_match_two_days_apart_is_not_joined():
     """Otherwise a return leg would be given the stage of the first one."""
     builder = CanonicalMatchBuilder()
-    stage_of_match = {
-        (date(2024, 6, 23), frozenset(("Argentina", "Canada"))): "Group Stage"
-    }
-    row = make_result_row(
-        home_team="Argentina", away_team="Canada", match_date="2024-06-20"
+    results = builder._with_match_identifier(
+        make_results(date=["2024-06-20"], home_team=["Argentina"], away_team=["Canada"])
+    )
+    stages = make_other_table(
+        "2024-06-23", "Argentina", "Canada", "tournament_stage", "Group Stage"
     )
 
-    assert builder._looked_up(row, stage_of_match, "unknown") == "unknown"
+    joined = builder._joined_with(results, stages)
+
+    assert pd.isna(joined["tournament_stage"].iloc[0])
 
 
 def test_the_teams_are_joined_whichever_way_round_they_are_written():
     """The tournament files and the results file disagree on who was at home."""
     builder = CanonicalMatchBuilder()
-    stage_of_match = {(date(2018, 6, 17), frozenset(("Germany", "Brazil"))): "Final"}
-    row = make_result_row(home_team="Brazil", away_team="Germany")
+    results = builder._with_match_identifier(
+        make_results(home_team=["Brazil"], away_team=["Germany"])
+    )
+    stages = make_other_table(
+        "2018-06-17", "Germany", "Brazil", "tournament_stage", "Final"
+    )
 
-    assert builder._looked_up(row, stage_of_match, "unknown") == "Final"
+    joined = builder._joined_with(results, stages)
+
+    assert joined["tournament_stage"].iloc[0] == "Final"
+
+
+def test_a_join_never_adds_a_row():
+    """A widened join table can match twice, and would double the match."""
+    builder = CanonicalMatchBuilder()
+    results = builder._with_match_identifier(
+        make_results(date=["2024-06-21"], home_team=["Peru"], away_team=["Chile"])
+    )
+    stages = pd.concat(
+        [
+            make_other_table(
+                "2024-06-21", "Peru", "Chile", "tournament_stage", "Group Stage"
+            ),
+            make_other_table(
+                "2024-06-22", "Peru", "Chile", "tournament_stage", "Quarter-finals"
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    joined = builder._joined_with(results, stages)
+
+    assert len(joined) == 1
+    assert joined["tournament_stage"].iloc[0] == "Group Stage"
 
 
 def test_every_kind_of_competition_gets_a_category():
-    builder = CanonicalMatchBuilder()
+    names = pd.Series(
+        [
+            "Friendly",
+            "FIFA World Cup qualification",
+            "FIFA World Cup",
+            "UEFA Nations League",
+            "Island Games",
+        ]
+    )
 
-    assert builder.category_of("Friendly") == CanonicalMatchDataset.FRIENDLY_CATEGORY
-    assert (
-        builder.category_of("FIFA World Cup qualification")
-        == CanonicalMatchDataset.QUALIFICATION_CATEGORY
-    )
-    assert (
-        builder.category_of("FIFA World Cup")
-        == CanonicalMatchDataset.MAJOR_TOURNAMENT_CATEGORY
-    )
-    assert (
-        builder.category_of("UEFA Nations League")
-        == CanonicalMatchDataset.NATIONS_LEAGUE_CATEGORY
-    )
-    assert (
-        builder.category_of("Island Games")
-        == CanonicalMatchDataset.OTHER_TOURNAMENT_CATEGORY
-    )
+    categories = list(CanonicalMatchBuilder().category_of(names))
+
+    assert categories == [
+        CanonicalMatchDataset.FRIENDLY_CATEGORY,
+        CanonicalMatchDataset.QUALIFICATION_CATEGORY,
+        CanonicalMatchDataset.MAJOR_TOURNAMENT_CATEGORY,
+        CanonicalMatchDataset.NATIONS_LEAGUE_CATEGORY,
+        CanonicalMatchDataset.OTHER_TOURNAMENT_CATEGORY,
+    ]
 
 
 def test_a_qualification_is_never_counted_as_the_tournament_itself():
-    """Both names hold the tournament, and the order of the checks decides."""
-    builder = CanonicalMatchBuilder()
-
-    assert (
-        builder.category_of("AFC Asian Cup qualification")
-        == CanonicalMatchDataset.QUALIFICATION_CATEGORY
+    """Both names hold the tournament, and the order of the tests decides."""
+    categories = CanonicalMatchBuilder().category_of(
+        pd.Series(["AFC Asian Cup qualification"])
     )
+
+    assert categories.iloc[0] == CanonicalMatchDataset.QUALIFICATION_CATEGORY
 
 
 def test_the_home_team_is_host_when_it_plays_in_its_own_country():
-    builder = CanonicalMatchBuilder()
+    built = CanonicalMatchBuilder()._with_canonical_columns(
+        make_results().assign(shootout_winner=None, tournament_stage=None)
+    )
 
-    columns = builder._shared_columns(make_result_row(), "identifier", {})
-
-    assert columns["home_team_is_host"] is True
-    assert columns["away_team_is_host"] is False
-    assert columns["is_neutral_venue"] is False
+    assert bool(built["home_team_is_host"].iloc[0]) is True
+    assert bool(built["away_team_is_host"].iloc[0]) is False
+    assert bool(built["is_neutral_venue"].iloc[0]) is False
 
 
 def test_nobody_is_host_at_a_neutral_venue():
-    builder = CanonicalMatchBuilder()
-    row = make_result_row(country="Qatar", neutral="TRUE")
+    built = CanonicalMatchBuilder()._with_canonical_columns(
+        make_results(country=["Qatar"], neutral=["TRUE"]).assign(
+            shootout_winner=None, tournament_stage=None
+        )
+    )
 
-    columns = builder._shared_columns(row, "identifier", {})
-
-    assert columns["home_team_is_host"] is False
-    assert columns["away_team_is_host"] is False
-    assert columns["is_neutral_venue"] is True
+    assert bool(built["home_team_is_host"].iloc[0]) is False
+    assert bool(built["away_team_is_host"].iloc[0]) is False
+    assert bool(built["is_neutral_venue"].iloc[0]) is True
 
 
 def test_a_match_that_went_to_a_shootout_flags_its_regular_time_score():
     """The source score is the one after extra time, so ninety minutes is a guess."""
-    builder = CanonicalMatchBuilder()
-    row = make_result_row("1", "1", home_team="England", away_team="Italy")
-    winner_of_match = {
-        (date(2018, 6, 17), frozenset(("England", "Italy"))): "Italy",
-    }
+    built = CanonicalMatchBuilder()._with_canonical_columns(
+        make_results(home_score=["1"], away_score=["1"]).assign(
+            shootout_winner="Italy", tournament_stage=None
+        )
+    )
 
-    built = builder._build_row(row, "identifier", {}, winner_of_match)
-
-    assert built["shootout_winner"] == "Italy"
-    assert built["is_regular_time_score_reconstructed_unreliable"] is True
-    assert built["home_goals_final"] == "1"
+    assert built["shootout_winner"].iloc[0] == "Italy"
+    assert bool(built["is_regular_time_score_reconstructed_unreliable"].iloc[0]) is True
 
 
 def test_a_match_without_a_shootout_keeps_its_regular_time_score():
-    builder = CanonicalMatchBuilder()
+    built = CanonicalMatchBuilder()._with_canonical_columns(
+        make_results().assign(shootout_winner=None, tournament_stage=None)
+    )
 
-    built = builder._build_row(make_result_row(), "identifier", {}, {})
+    assert built["shootout_winner"].iloc[0] == ""
+    assert (
+        bool(built["is_regular_time_score_reconstructed_unreliable"].iloc[0]) is False
+    )
+    assert built["home_goals_regular_time"].iloc[0] == built["home_goals_final"].iloc[0]
 
-    assert built["shootout_winner"] == ""
-    assert built["is_regular_time_score_reconstructed_unreliable"] is False
-    assert built["home_goals_regular_time"] == built["home_goals_final"]
+
+def test_an_unknown_stage_is_named_rather_than_left_empty():
+    built = CanonicalMatchBuilder()._with_canonical_columns(
+        make_results().assign(shootout_winner=None, tournament_stage=None)
+    )
+
+    assert built["tournament_stage"].iloc[0] == CanonicalMatchDataset.UNKNOWN_STAGE

@@ -639,6 +639,9 @@ class CsvFileSetting:
         IGNORE_BROKEN_CHARACTERS: The Wyscout event files carry a few bytes
             that are not valid UTF-8, and one of them must not stop a run over
             millions of rows.
+        WIDEST_ROW_TO_EXPECT: How many fields a row may have before a reader
+            gives up on it. Some football-data files carry a stray extra
+            field in a row, and the widest of them holds 76.
     """
 
     ENCODING: str = "utf-8"
@@ -647,6 +650,8 @@ class CsvFileSetting:
     APPEND_MODE: str = "a"
     READ_MODE: str = "r"
     IGNORE_BROKEN_CHARACTERS: str = "ignore"
+    LINE_TERMINATOR: str = "\r\n"
+    WIDEST_ROW_TO_EXPECT: int = 512
 
 
 class InternationalResultSource:
@@ -1383,12 +1388,12 @@ class SquadFeatureCalculation:
     COLUMN_NAMES: tuple[str, ...] = (
         "tournament",
         "team",
-        "n_players",
-        "n_clubs",
-        "hhi",
-        "top_club",
-        "top_club_share",
-        "top5_league_share",
+        "players",
+        "clubs",
+        "club_concentration",
+        "biggest_club",
+        "biggest_club_share",
+        "top_five_league_share",
     )
 
 
@@ -1402,15 +1407,16 @@ class TravelLoadCalculation:
 
     SOURCE_FOLDER: Path = StatsBombSource.OUTPUT_FOLDER
     OUTPUT_FILE: Path = ComputedFeaturePath.FOLDER / "travel_load.csv"
+    STADIUM_COLUMN: str = "stadium"
     COLUMN_NAMES: tuple[str, ...] = (
         "tournament",
         "team",
         "match_date",
         "city",
-        "km_since_last_match",
-        "cumulative_km",
-        "tz_shift_since_last",
-        "cumulative_tz_shifts",
+        "kilometres_since_last_match",
+        "total_kilometres",
+        "time_zone_shift_since_last_match",
+        "total_time_zone_shifts",
     )
 
 
@@ -2815,6 +2821,7 @@ class LineMovementCalculation:
         / "international_open_close_odds_2016.csv"
     )
     COVERAGE_FILE_NAME: str = "coverage_report.csv"
+    SCORE_SEPARATOR: str = ":"
 
     OPENING_COLUMNS: tuple[str, str, str] = ("PSH", "PSD", "PSA")
     CLOSING_COLUMNS: tuple[str, str, str] = ("PSCH", "PSCD", "PSCA")
@@ -3318,6 +3325,7 @@ class OddsCoverageReport:
         "has_pinnacle_closing",
     )
 
+    NO_SEASON_TEXT: str = "-"
     LOWEST_USABLE_FILL_RATE: float = 0.5
     OPENING_COLUMNS: tuple[str, ...] = ("PSH", "B365H", "AvgH")
     CLOSING_COLUMNS: tuple[str, ...] = ("PSCH", "B365CH", "AvgCH")
@@ -3347,7 +3355,9 @@ class SquadValueCalculation:
 
     FIRST_KEY_DATE_YEAR: int = 2005
     KEY_DATE_MONTHS: tuple[int, ...] = (1, 7)
+    KEY_DATE_FREQUENCY: str = "6MS"
     FIRST_DAY_OF_MONTH: int = 1
+    KEY_DATE_FORMAT: str = "%Y-%m-%d"
     SQUAD_SIZE: int = 26
     LOOK_BACK_IN_DAYS: int = 540
     SMALLEST_USABLE_PLAYER_COUNT: int = 6
@@ -3361,7 +3371,7 @@ class SquadValueCalculation:
         "as_of_date",
         "country",
         "squad_value_eur",
-        "n_players",
+        "players",
     )
 
     COUNTRY_ALIASES: dict[str, str] = {
@@ -3405,10 +3415,10 @@ class RefereeProfileCalculation:
 
     COLUMN_NAMES: tuple[str, ...] = (
         "referee",
-        "n_matches",
-        "avg_yellow_cards",
-        "avg_red_cards",
-        "avg_fouls",
+        "matches",
+        "mean_yellow_cards",
+        "mean_red_cards",
+        "mean_fouls",
         "tournaments",
     )
 

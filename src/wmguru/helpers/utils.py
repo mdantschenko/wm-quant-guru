@@ -5,28 +5,29 @@ place. Together with constant.py and data_class.py these are the three files
 that hold many small classes on purpose.
 
 The classes are sorted so that a class only ever uses one above it:
-   1. TextNormalizer           compare two spellings of the same name
-   2. DateNormalizer           one date format out of the many sources use
-   3. ConfederationLookup      which confederation a national team is in
-   4. ApiKeyReader             get a key without putting it into the code
-   5. GeographyCalculator      distance and time zone between two places
-   6. CsvFile                  read and write a CSV file, resumable
-   7. SharedFeatureFile        one file that both event sources write into
-   8. MatchDisciplineCounter   fouls and cards, counted the same way by both
-   9. MatchStyleCalculator     the actions of a match to two style rows
-  10. PassingLaneCounter       the passes between two players of a team
-  11. PassingNetworkCalculator the passing network of a team, summarised
-  12. PlayerMatchMetricCalculator what one player did in one match
-  13. ExpectedThreatGrid       what a place on the pitch is worth
-  14. ExpectedThreatGridFile   that grid on disk, for both sources
-  15. PreMatchRollingAverage  the form of a team before its next match
-  16. ZipArchiveExtractor      unpack an archive that was downloaded
-  17. StadiumLocator           stadium name to city and coordinates
-  18. WebFileDownloader        fetch a file over HTTP
-  19. WikipediaPageReader      read the raw wikitext of a page
-  20. WyscoutDataReader        the lookup tables of the Wyscout dataset
-  21. StatsBombOpenDataReader  competitions, matches and events of StatsBomb
-  22. WorldCupTeamNameReader   the 48 team names of the 2026 World Cup
+   1. DecimalRounder           cut a column of numbers down to a few digits
+   2. TextNormalizer           compare two spellings of the same name
+   3. DateNormalizer           one date format out of the many sources use
+   4. ConfederationLookup      which confederation a national team is in
+   5. ApiKeyReader             get a key without putting it into the code
+   6. GeographyCalculator      distance and time zone between two places
+   7. CsvFile                  read and write a CSV file, resumable
+   8. SharedFeatureFile        one file that both event sources write into
+   9. MatchDisciplineCounter   fouls and cards, counted the same way by both
+  10. MatchStyleCalculator     the actions of a match to two style rows
+  11. PassingLaneCounter       the passes between two players of a team
+  12. PassingNetworkCalculator the passing network of a team, summarised
+  13. PlayerMatchMetricCalculator what one player did in one match
+  14. ExpectedThreatGrid       what a place on the pitch is worth
+  15. ExpectedThreatGridFile   that grid on disk, for both sources
+  16. PreMatchRollingAverage   the form of a team before its next match
+  17. ZipArchiveExtractor      unpack an archive that was downloaded
+  18. StadiumLocator           stadium name to city and coordinates
+  19. WebFileDownloader        fetch a file over HTTP
+  20. WikipediaPageReader      read the raw wikitext of a page
+  21. WyscoutDataReader        the lookup tables of the Wyscout dataset
+  22. StatsBombOpenDataReader  competitions, matches and events of StatsBomb
+  23. WorldCupTeamNameReader   the 48 team names of the 2026 World Cup
 """
 
 import ast
@@ -48,6 +49,9 @@ from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 from typing import Any
+
+import numpy as np
+import pandas as pd
 
 from wmguru.helpers.constant import (
     ConfederationCalibration,
@@ -79,6 +83,36 @@ from wmguru.helpers.data_class import (
     WyscoutMatchFacts,
     WyscoutNameLookups,
 )
+
+
+class DecimalRounder:
+    """Cutting a column of numbers down to a fixed number of digits.
+
+    NumPy rounds by scaling a value up, rounding it and scaling it back
+    down, and that detour turns 1.1535 into 1.154 although the stored
+    number sits just below the halfway point. Writing the value out with
+    the wanted digits rounds on the stored number itself, which is what
+    Python's own round does, so a file built from a table carries the same
+    digits as one built row by row.
+    """
+
+    def __init__(self, decimal_places: int) -> None:
+        self._write_out_the_digits = f"%.{decimal_places}f"
+
+    def round_every_value(self, values: pd.Series) -> pd.Series:
+        """Cut a whole column down to the digits this rounder was built with."""
+        rounded = np.char.mod(
+            self._write_out_the_digits, values.to_numpy(dtype=float)
+        ).astype(float)
+        return pd.Series(rounded, index=values.index)
+
+    def round_every_column(
+        self, table: pd.DataFrame, column_names: list[str]
+    ) -> pd.DataFrame:
+        """Cut the named columns of a table down, and leave the rest alone."""
+        return table.assign(
+            **{name: self.round_every_value(table[name]) for name in column_names}
+        )
 
 
 class TextNormalizer:
@@ -201,6 +235,20 @@ class DateNormalizer:
             return self._read_a_slash_date(text)
         return self._read_a_named_month_date(text)
 
+    def to_iso_date_of_every_row(self, written_dates: pd.Series) -> pd.Series:
+        """Rewrite a whole column of dates as yyyy-mm-dd.
+
+        Only the spellings that really occur are rewritten, and a date
+        repeats over every match of its day, so the work is done once per
+        day and not once per match.
+        """
+        every_spelling = pd.Series(written_dates.unique())
+        return written_dates.map(
+            pd.Series(
+                every_spelling.map(self.to_iso_date).to_numpy(), index=every_spelling
+            )
+        )
+
     def _is_already_iso(self, text: str) -> bool:
         """Return True when the text already starts with yyyy-mm-dd."""
         return (
@@ -281,6 +329,24 @@ class ConfederationLookup:
         """
         return self._confederation_of_name.get(
             self._text_normalizer.to_comparable_text(team_name)
+        )
+
+    def confederation_of_every_team(self, team_names: pd.Series) -> pd.Series:
+        """Name the confederation behind a whole column of team names.
+
+        Only the spellings that really occur are looked up, so the work is
+        done once per name and not once per match.
+
+        Returns:
+            The confederation per row, and nothing where the table does not
+            know the team.
+        """
+        every_spelling = pd.Series(team_names.unique())
+        return team_names.map(
+            pd.Series(
+                every_spelling.map(self.confederation_of).to_numpy(),
+                index=every_spelling,
+            )
         )
 
 
@@ -402,6 +468,48 @@ class GeographyCalculator:
             self.time_zone_of(second_longitude) - self.time_zone_of(first_longitude)
         )
 
+    def distance_of_every_leg(
+        self,
+        first_latitude: pd.Series,
+        first_longitude: pd.Series,
+        second_latitude: pd.Series,
+        second_longitude: pd.Series,
+    ) -> pd.Series:
+        """Measure a whole column of trips at once, in kilometres.
+
+        Returns:
+            The great circle distance per row, not rounded, and nothing at
+            all where one of the two places is missing.
+        """
+        first_latitude_in_radians = np.radians(first_latitude)
+        second_latitude_in_radians = np.radians(second_latitude)
+        latitude_difference = np.radians(second_latitude - first_latitude)
+        longitude_difference = np.radians(second_longitude - first_longitude)
+        half_chord = (
+            np.sin(latitude_difference / 2) ** 2
+            + np.cos(first_latitude_in_radians)
+            * np.cos(second_latitude_in_radians)
+            * np.sin(longitude_difference / 2) ** 2
+        )
+        return (
+            2
+            * GeographySetting.EARTH_RADIUS_IN_KILOMETRES
+            * np.arcsin(np.sqrt(half_chord))
+        )
+
+    def time_zone_shift_of_every_leg(
+        self, first_longitude: pd.Series, second_longitude: pd.Series
+    ) -> pd.Series:
+        """Count the hours the body clock has to move, for a whole column."""
+        return (
+            self._time_zone_of_every_place(second_longitude)
+            - self._time_zone_of_every_place(first_longitude)
+        ).abs()
+
+    def _time_zone_of_every_place(self, longitude: pd.Series) -> pd.Series:
+        """Put a whole column of places into their time zone."""
+        return np.round(longitude / GeographySetting.DEGREES_PER_TIME_ZONE)
+
 
 class CsvFile:
     """One CSV file of the project, with its column names.
@@ -424,6 +532,87 @@ class CsvFile:
     def path(self) -> Path:
         """Where the file lies, for the message at the end of a run."""
         return self._target_file
+
+    def read_table(self) -> pd.DataFrame:
+        """Read the whole file as a table of text.
+
+        Every cell comes back as it stands in the file, so nothing is guessed
+        away: the sources write NA where a value is still missing, which
+        pandas would otherwise read as a missing value and a caller would
+        then take for a real one. Convert a column on purpose afterwards.
+
+        Returns:
+            The table, or an empty one with the column names this file was
+            built with when the file does not exist yet.
+        """
+        if not self._target_file.exists():
+            return pd.DataFrame(columns=list(self._column_names), dtype=str)
+        try:
+            return pd.read_csv(self._target_file, **self._reading_settings())
+        except pd.errors.ParserError:
+            return self._read_the_file_with_ragged_rows()
+
+    def _reading_settings(self) -> dict[str, Any]:
+        """How every read of this project has to be set up."""
+        return {
+            "dtype": str,
+            "keep_default_na": False,
+            "encoding": CsvFileSetting.ENCODING,
+            "encoding_errors": CsvFileSetting.IGNORE_BROKEN_CHARACTERS,
+        }
+
+    def _read_the_file_with_ragged_rows(self) -> pd.DataFrame:
+        """Read a file whose rows carry more fields than its header names.
+
+        Some of the football-data files have a stray extra field in a row,
+        which stops a reader that expects every row to be as wide as the
+        header. Reading with a fixed number of nameless columns keeps such a
+        row instead of dropping it, and the fields behind the last header
+        name are then cut off again.
+        """
+        widened = pd.read_csv(
+            self._target_file,
+            header=None,
+            names=range(CsvFileSetting.WIDEST_ROW_TO_EXPECT),
+            **self._reading_settings(),
+        )
+        header_names = widened.iloc[0].dropna().reset_index(drop=True)
+        return (
+            widened.iloc[1:, : len(header_names)]
+            .set_axis(self._told_apart(header_names), axis="columns")
+            .fillna("")
+            .reset_index(drop=True)
+        )
+
+    def _told_apart(self, header_names: pd.Series) -> pd.Series:
+        """Number the header names that turn up more than once.
+
+        A file that names two columns the same way, or leaves both of them
+        unnamed, would otherwise give a table nothing can be joined onto.
+        The second one becomes name.1, which is what pandas calls it when it
+        reads the header itself.
+        """
+        seen_before = header_names.groupby(header_names).cumcount()
+        return header_names.where(
+            seen_before == 0, header_names + "." + seen_before.astype(str)
+        )
+
+    def write_table(self, table: pd.DataFrame) -> None:
+        """Write a whole table, in the column order this file was built with.
+
+        Args:
+            table: What to write. A column the file does not know is left
+                out, a column it knows but the table lacks is written empty,
+                so the file always has the same shape.
+        """
+        self._target_file.parent.mkdir(parents=True, exist_ok=True)
+        wanted = list(self._column_names) if self._column_names else list(table.columns)
+        table.reindex(columns=wanted).to_csv(
+            self._target_file,
+            index=False,
+            encoding=CsvFileSetting.ENCODING,
+            lineterminator=CsvFileSetting.LINE_TERMINATOR,
+        )
 
     def read_rows(self) -> list[dict[str, str]]:
         """Read the whole file, one dictionary per row.
@@ -1586,9 +1775,9 @@ class PreMatchRollingAverage:
     """The smoothed form of every team, as it stood before the current match.
 
     A rolling average is only worth anything if it never saw the match it is
-    used to predict. This one is therefore asked first and updated second: a
-    row carries the state before its own match, and the match only enters the
-    state once the row has been written.
+    used to predict. Every value is therefore shifted by one row inside its
+    own team, so a row carries what the team had behind it and never its own
+    match.
 
     Two averages come out of it, one that fades older matches out gradually
     and one over a fixed number of the most recent ones.
@@ -1597,38 +1786,53 @@ class PreMatchRollingAverage:
     def __init__(self, fading_weight: float, window_length: int) -> None:
         self._fading_weight = fading_weight
         self._window_length = window_length
-        self._faded_average: dict[str, float] = {}
-        self._recent_values: dict[str, list[float]] = {}
-        self._match_count: dict[str, int] = {}
 
-    def before_the_next_match(self, team_name: str) -> tuple[float, float, int]:
-        """Read the state of one team before its next match.
+    def what_every_team_brought_into_its_match(
+        self, team_names: pd.Series, what_the_team_did: pd.Series
+    ) -> pd.DataFrame:
+        """Sum up the past of every team without letting its own match in.
+
+        Args:
+            team_names: Whose match each row is. The rows must already be in
+                the order the matches were played.
+            what_the_team_did: The value to average, in the same order.
 
         Returns:
             The faded average, the average over the window, and how many
-            matches the team has behind it. A team that has never played
+            matches the team had behind it. A team that has never played
             comes back at zero, which reads as no form either way.
         """
-        recent = self._recent_values.get(team_name, [])
-        return (
-            self._faded_average.get(team_name, 0.0),
-            sum(recent) / len(recent) if recent else 0.0,
-            self._match_count.get(team_name, 0),
+        played_before = what_the_team_did.groupby(team_names, sort=False)
+        return pd.DataFrame(
+            {
+                "faded_average": played_before.transform(self._faded_up_to_here),
+                "mean_of_the_window": played_before.transform(self._window_up_to_here),
+                "matches_played_before": played_before.cumcount(),
+            }
         )
 
-    def add_one_match(self, team_name: str, value: float) -> None:
-        """Take one match into the state, after its row has been written."""
-        previous = self._faded_average.get(team_name)
-        self._faded_average[team_name] = (
-            value
-            if previous is None
-            else self._fading_weight * value + (1.0 - self._fading_weight) * previous
+    def _faded_up_to_here(self, values: pd.Series) -> pd.Series:
+        """Fade the matches of one team out, up to but not including each row."""
+        return (
+            values.ewm(alpha=self._fading_weight, adjust=False)
+            .mean()
+            .shift(1)
+            .fillna(0.0)
         )
-        recent = self._recent_values.setdefault(team_name, [])
-        recent.append(value)
-        if len(recent) > self._window_length:
-            recent.pop(0)
-        self._match_count[team_name] = self._match_count.get(team_name, 0) + 1
+
+    def _window_up_to_here(self, values: pd.Series) -> pd.Series:
+        """Average the last few matches of one team, its own one left out.
+
+        Adding nothing at the end turns a negative zero back into a plain
+        one, the way summing a list of values in Python does.
+        """
+        return (
+            values.rolling(self._window_length, min_periods=1)
+            .mean()
+            .shift(1)
+            .fillna(0.0)
+            + 0.0
+        )
 
 
 class ZipArchiveExtractor:
@@ -1725,6 +1929,24 @@ class StadiumLocator:
             if name_part in comparable_name:
                 return place
         return None
+
+    def find_the_place_of_every_stadium(self, stadium_names: pd.Series) -> pd.DataFrame:
+        """Find the place behind a whole column of stadium names.
+
+        Only the spellings that really occur are matched, so the work is done
+        once per stadium and not once per match.
+
+        Returns:
+            A city, a latitude and a longitude column, all three empty in a
+            row whose stadium the mapping table does not know.
+        """
+        every_spelling = pd.Series(stadium_names.unique())
+        found = pd.DataFrame(
+            every_spelling.map(self.find_place).tolist(),
+            columns=["city", "latitude", "longitude"],
+            index=every_spelling,
+        )
+        return found.reindex(stadium_names).set_index(stadium_names.index)
 
 
 class WebFileDownloader:

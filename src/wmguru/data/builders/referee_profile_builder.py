@@ -8,10 +8,10 @@ Only a match the source marks as complete counts, because a fixture that has
 not been played carries zeros that would drag every rate down.
 """
 
-from typing import Any
+import pandas as pd
 
 from wmguru.helpers.constant import RefereeProfileCalculation
-from wmguru.helpers.utils import CsvFile
+from wmguru.helpers.utils import CsvFile, DecimalRounder
 
 
 class RefereeProfileBuilder:
@@ -23,128 +23,109 @@ class RefereeProfileBuilder:
         Returns:
             How many referees the file holds.
         """
-        counts_of_referee = self._count_over_every_tournament()
+        matches = self._read_every_tournament()
+        profiles = self._summarise_every_referee(matches)
+
         output_file = CsvFile(
             RefereeProfileCalculation.OUTPUT_FILE,
             RefereeProfileCalculation.COLUMN_NAMES,
         )
-        output_file.write_rows(self._build_rows(counts_of_referee))
-        print(f"{len(counts_of_referee)} referee profiles -> {output_file.path}")
-        return len(counts_of_referee)
+        output_file.write_table(profiles)
+        print(f"{len(profiles)} referee profiles -> {output_file.path}")
+        return len(profiles)
 
-    def _count_over_every_tournament(self) -> dict[str, dict[str, Any]]:
-        """Walk every tournament file and add its matches up per referee."""
-        counts_of_referee: dict[str, dict[str, Any]] = {}
-        for match_file in sorted(RefereeProfileCalculation.SOURCE_FOLDER.glob("*.csv")):
-            for match in CsvFile(match_file).read_rows():
-                referee_name = self._usable_referee_of(match)
-                if referee_name is None:
-                    continue
-                self._add_one_match(
-                    counts_of_referee, referee_name, match, match_file.stem
-                )
-        return counts_of_referee
-
-    def _usable_referee_of(self, match: dict[str, str]) -> str | None:
-        """Read the referee of a finished match, or None when it does not count."""
-        referee_name = (
-            match.get(RefereeProfileCalculation.REFEREE_COLUMN) or ""
-        ).strip()
-        if (
-            match.get(RefereeProfileCalculation.STATUS_COLUMN)
-            != RefereeProfileCalculation.COMPLETE_STATUS
-        ):
-            return None
-        if referee_name in RefereeProfileCalculation.MISSING_REFEREE_TEXTS:
-            return None
-        return referee_name
-
-    def _add_one_match(
-        self,
-        counts_of_referee: dict[str, dict[str, Any]],
-        referee_name: str,
-        match: dict[str, str],
-        tournament_name: str,
-    ) -> None:
-        """Add the cards and fouls of one match to the count of its referee."""
-        counts = counts_of_referee.setdefault(
-            referee_name,
-            {
-                "matches": 0,
-                "yellow_cards": 0,
-                "red_cards": 0,
-                "fouls": 0,
-                "tournaments": set(),
-            },
+    def _read_every_tournament(self) -> pd.DataFrame:
+        """Read every tournament file into one table, with its own name on it."""
+        match_files = sorted(RefereeProfileCalculation.SOURCE_FOLDER.glob("*.csv"))
+        return pd.concat(
+            [
+                CsvFile(match_file).read_table().assign(tournament=match_file.stem)
+                for match_file in match_files
+            ],
+            ignore_index=True,
         )
-        counts["matches"] += 1
-        counts["yellow_cards"] += self._sum_of(
-            match, RefereeProfileCalculation.YELLOW_CARD_COLUMNS
+
+    def _summarise_every_referee(self, matches: pd.DataFrame) -> pd.DataFrame:
+        """Add the matches of every referee up and turn the totals into rates."""
+        usable = self._only_the_usable_matches(matches)
+        counted = usable.assign(
+            yellow_cards=self._added_up(
+                usable, RefereeProfileCalculation.YELLOW_CARD_COLUMNS
+            ),
+            red_cards=self._added_up(
+                usable, RefereeProfileCalculation.RED_CARD_COLUMNS
+            ),
+            fouls=self._added_up(usable, RefereeProfileCalculation.FOUL_COLUMNS),
         )
-        counts["red_cards"] += self._sum_of(
-            match, RefereeProfileCalculation.RED_CARD_COLUMNS
+        referee_column = RefereeProfileCalculation.REFEREE_COLUMN
+        grouped = counted.groupby(referee_column, dropna=False, sort=False)
+        totals = grouped.agg(
+            matches=("tournament", "size"),
+            yellow_cards=("yellow_cards", "sum"),
+            red_cards=("red_cards", "sum"),
+            fouls=("fouls", "sum"),
         )
-        counts["fouls"] += self._sum_of(match, RefereeProfileCalculation.FOUL_COLUMNS)
-        counts["tournaments"].add(tournament_name)
-
-    def _sum_of(self, match: dict[str, str], column_names: tuple[str, ...]) -> int:
-        """Add up the named columns of one match, treating anything odd as zero."""
-        return sum(self._as_whole_number(match.get(name)) for name in column_names)
-
-    def _as_whole_number(self, value: str | None) -> int:
-        """Read a count, or zero when the cell is empty or not a number.
-
-        Args:
-            value: The cell as the source wrote it.
-
-        Returns:
-            The number, or zero. The source writes N/A and empty cells for a
-            match whose statistics it never collected.
-        """
-        try:
-            return int(value or 0)
-        except ValueError:
-            return 0
-
-    def _build_rows(
-        self, counts_of_referee: dict[str, dict[str, Any]]
-    ) -> list[list[Any]]:
-        """Build one row per referee, turning the counts into rates."""
-        rows: list[list[Any]] = []
-        busiest_first = sorted(
-            counts_of_referee.items(), key=lambda entry: -int(entry[1]["matches"])
-        )
-        for referee_name, counts in busiest_first:
-            match_count = int(counts["matches"])
-            rows.append(
-                [
-                    referee_name,
-                    match_count,
-                    self._rate(
-                        counts["yellow_cards"],
-                        match_count,
-                        RefereeProfileCalculation.YELLOW_DECIMAL_PLACES,
-                    ),
-                    self._rate(
-                        counts["red_cards"],
-                        match_count,
-                        RefereeProfileCalculation.RED_DECIMAL_PLACES,
-                    ),
-                    self._rate(
-                        counts["fouls"],
-                        match_count,
-                        RefereeProfileCalculation.FOUL_DECIMAL_PLACES,
-                    ),
-                    RefereeProfileCalculation.TOURNAMENT_SEPARATOR.join(
-                        sorted(counts["tournaments"])
-                    ),
-                ]
+        totals["tournaments"] = grouped["tournament"].agg(
+            lambda names: RefereeProfileCalculation.TOURNAMENT_SEPARATOR.join(
+                sorted(set(names))
             )
-        return rows
+        )
+        busiest_first = totals.sort_values(
+            "matches", ascending=False, kind="stable"
+        ).reset_index()
+        return busiest_first.rename(columns={referee_column: "referee"}).assign(
+            mean_yellow_cards=self._rate(
+                busiest_first["yellow_cards"],
+                busiest_first["matches"],
+                RefereeProfileCalculation.YELLOW_DECIMAL_PLACES,
+            ),
+            mean_red_cards=self._rate(
+                busiest_first["red_cards"],
+                busiest_first["matches"],
+                RefereeProfileCalculation.RED_DECIMAL_PLACES,
+            ),
+            mean_fouls=self._rate(
+                busiest_first["fouls"],
+                busiest_first["matches"],
+                RefereeProfileCalculation.FOUL_DECIMAL_PLACES,
+            ),
+        )
 
-    def _rate(self, total: int, match_count: int, decimal_places: int) -> float:
+    def _only_the_usable_matches(self, matches: pd.DataFrame) -> pd.DataFrame:
+        """Keep the finished matches whose referee the source really names."""
+        referee_names = (
+            matches[RefereeProfileCalculation.REFEREE_COLUMN].fillna("").str.strip()
+        )
+        was_played = (
+            matches[RefereeProfileCalculation.STATUS_COLUMN]
+            == RefereeProfileCalculation.COMPLETE_STATUS
+        )
+        has_a_referee = ~referee_names.isin(
+            RefereeProfileCalculation.MISSING_REFEREE_TEXTS
+        )
+        return matches[was_played & has_a_referee].assign(
+            **{RefereeProfileCalculation.REFEREE_COLUMN: referee_names}
+        )
+
+    def _added_up(
+        self, matches: pd.DataFrame, column_names: tuple[str, ...]
+    ) -> pd.Series:
+        """Add the named columns of every match up, reading anything odd as zero.
+
+        The source writes N/A and empty cells for a match whose statistics it
+        never collected, and those must count as nothing rather than stop the
+        run.
+        """
+        wanted = matches.reindex(columns=list(column_names))
+        return (
+            wanted.apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis="columns")
+        )
+
+    def _rate(
+        self, totals: pd.Series, match_counts: pd.Series, decimal_places: int
+    ) -> pd.Series:
         """Turn a total into a per match rate."""
-        return round(int(total) / match_count, decimal_places)
+        return DecimalRounder(decimal_places).round_every_value(totals / match_counts)
 
 
 if __name__ == "__main__":

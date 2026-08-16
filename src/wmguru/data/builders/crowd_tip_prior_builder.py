@@ -9,10 +9,14 @@ strong the favourite is. Where the two disagree most is where a contrarian tip
 is worth the most.
 """
 
-from typing import Any
+import numpy as np
+import pandas as pd
 
 from wmguru.helpers.constant import CrowdTipPriorCalculation, InternationalResultSource
 from wmguru.helpers.utils import CsvFile
+
+SCORELINE_KEYS = ["favorite_goals", "underdog_goals"]
+CELL_KEYS = ["favorite_band", *SCORELINE_KEYS]
 
 
 class CrowdTipPriorBuilder:
@@ -24,176 +28,208 @@ class CrowdTipPriorBuilder:
         Returns:
             How many favourite bands the summary holds.
         """
-        counts = self._count_the_real_results()
-        prior_rows, summary_rows = self._build_rows(counts)
+        counted_cells = self._count_the_real_results()
+        prior_cells = self._mix_the_crowd_preference_in(counted_cells)
+        band_summary = self._summarise_every_band(prior_cells)
 
         CsvFile(
             CrowdTipPriorCalculation.BY_BAND_OUTPUT_FILE,
             CrowdTipPriorCalculation.BY_BAND_COLUMN_NAMES,
-        ).write_dict_rows(prior_rows)
+        ).write_table(self._rounded_for_writing(prior_cells))
         CsvFile(
             CrowdTipPriorCalculation.SUMMARY_OUTPUT_FILE,
             CrowdTipPriorCalculation.SUMMARY_COLUMN_NAMES,
-        ).write_dict_rows(summary_rows)
+        ).write_table(band_summary)
         print(
-            f"  OK    {len(prior_rows)} prior cells over "
-            f"{len(summary_rows)} favourite bands"
+            f"  OK    {len(prior_cells)} prior cells over "
+            f"{len(band_summary)} favourite bands"
         )
-        return len(summary_rows)
+        return len(band_summary)
 
-    def _count_the_real_results(self) -> dict[str, dict[tuple[int, int], int]]:
+    def _count_the_real_results(self) -> pd.DataFrame:
         """Count how often each scoreline really happened, per favourite band.
 
-        The result is written from the point of view of the favourite, so a
-        1:0 always means the stronger side won by one, whether it played at
-        home or away.
+        Every band gets the whole grid, so a scoreline that never happened
+        still carries its row with a count of nothing.
         """
-        rating_before = self._read_the_ratings()
-        counts: dict[str, dict[tuple[int, int], int]] = {}
-        for row in CsvFile(CrowdTipPriorCalculation.RESULT_FILE).read_rows():
-            scoreline = self._scoreline_of(row)
-            ratings = rating_before.get(
-                (
-                    row[InternationalResultSource.DATE_COLUMN],
-                    row[InternationalResultSource.HOME_TEAM_COLUMN],
-                    row[InternationalResultSource.AWAY_TEAM_COLUMN],
-                )
-            )
-            if scoreline is None or ratings is None:
-                continue
-            expectation = self._home_win_expectation(ratings, row)
-            band = self._band_of(max(expectation, 1.0 - expectation))
-            if band is None:
-                continue
-            home_goals, away_goals = scoreline
-            cell = (
-                (home_goals, away_goals)
-                if expectation >= 0.5
-                else (away_goals, home_goals)
-            )
-            counts.setdefault(band, {})[cell] = (
-                counts.setdefault(band, {}).get(cell, 0) + 1
-            )
-        return counts
+        matches = self._read_matches_that_carry_a_rating()
+        seen_from_the_favourite = self._turned_towards_the_favourite(matches)
+        counted = (
+            seen_from_the_favourite.groupby(CELL_KEYS, dropna=False, observed=True)
+            .size()
+            .rename("matches_with_this_scoreline")
+            .reset_index()
+        )
+        whole_grid = (
+            counted[["favorite_band"]]
+            .drop_duplicates()
+            .merge(self._every_scoreline_of_the_grid(), how="cross")
+        )
+        return (
+            whole_grid.merge(counted, on=CELL_KEYS, how="left")
+            .fillna({"matches_with_this_scoreline": 0})
+            .astype({"matches_with_this_scoreline": int})
+            .sort_values(CELL_KEYS)
+            .reset_index(drop=True)
+        )
 
-    def _read_the_ratings(self) -> dict[tuple[str, str, str], tuple[float, float]]:
-        """Read what both teams were rated before each match they played."""
-        return {
-            (
-                row["date"],
-                row["home_team"],
-                row["away_team"],
-            ): (float(row["elo_home_pre"]), float(row["elo_away_pre"]))
-            for row in CsvFile(CrowdTipPriorCalculation.ELO_HISTORY_FILE).read_rows()
-        }
+    def _read_matches_that_carry_a_rating(self) -> pd.DataFrame:
+        """Join every played international onto the rating both sides had.
 
-    def _scoreline_of(self, row: dict[str, str]) -> tuple[int, int] | None:
-        """Read the result, cut down to the grid the tips are given on.
-
-        Returns:
-            The goals of both sides, or None for a match that was never
-            played. Anything above the grid counts as the highest cell,
-            because nobody tips a seven.
+        Four fixtures are listed twice on the same day against the same
+        opponent, and only the later rating of such a pair is kept, so the
+        join cannot multiply a match out into several rows.
         """
-        try:
-            home_goals = int(row["home_score"])
-            away_goals = int(row["away_score"])
-        except (KeyError, TypeError, ValueError):
-            return None
+        results = CsvFile(CrowdTipPriorCalculation.RESULT_FILE).read_table()
+        ratings = (
+            CsvFile(CrowdTipPriorCalculation.ELO_HISTORY_FILE)
+            .read_table()
+            .drop_duplicates(subset=["date", "home_team", "away_team"], keep="last")
+        )
+        played = results.assign(
+            home_goals=pd.to_numeric(results["home_score"], errors="coerce"),
+            away_goals=pd.to_numeric(results["away_score"], errors="coerce"),
+        ).dropna(subset=["home_goals", "away_goals"])
+
+        return played.merge(
+            ratings.assign(
+                home_rating=pd.to_numeric(ratings["elo_home_pre"]),
+                away_rating=pd.to_numeric(ratings["elo_away_pre"]),
+            )[["date", "home_team", "away_team", "home_rating", "away_rating"]],
+            left_on=[
+                InternationalResultSource.DATE_COLUMN,
+                InternationalResultSource.HOME_TEAM_COLUMN,
+                InternationalResultSource.AWAY_TEAM_COLUMN,
+            ],
+            right_on=["date", "home_team", "away_team"],
+            how="inner",
+        )
+
+    def _turned_towards_the_favourite(self, matches: pd.DataFrame) -> pd.DataFrame:
+        """Write every result from the point of view of the stronger side.
+
+        A 1:0 then always means the favourite won by one, whether it played
+        at home or away. Anything above the grid counts as the highest cell,
+        because nobody tips a seven.
+        """
+        home_win_chance = self._home_win_chance(matches)
+        home_is_the_favourite = home_win_chance >= 0.5
         highest = CrowdTipPriorCalculation.HIGHEST_GOALS_IN_THE_GRID
-        return min(home_goals, highest), min(away_goals, highest)
+        home_goals = matches["home_goals"].clip(upper=highest).astype(int)
+        away_goals = matches["away_goals"].clip(upper=highest).astype(int)
 
-    def _home_win_expectation(
-        self, ratings: tuple[float, float], row: dict[str, str]
-    ) -> float:
+        return matches.assign(
+            favorite_band=self._band_of(
+                np.maximum(home_win_chance, 1.0 - home_win_chance)
+            ),
+            favorite_goals=np.where(home_is_the_favourite, home_goals, away_goals),
+            underdog_goals=np.where(home_is_the_favourite, away_goals, home_goals),
+        ).dropna(subset=["favorite_band"])
+
+    def _home_win_chance(self, matches: pd.DataFrame) -> pd.Series:
         """How likely the home side was to win, out of the two ratings.
 
         The home advantage falls away on a neutral pitch, which is most of a
         tournament.
         """
-        home_rating, away_rating = ratings
-        advantage = (
-            CrowdTipPriorCalculation.HOME_ADVANTAGE
-            if row[InternationalResultSource.NEUTRAL_VENUE_COLUMN].strip().upper()
+        plays_at_home = (
+            matches[InternationalResultSource.NEUTRAL_VENUE_COLUMN]
+            .str.strip()
+            .str.upper()
             == InternationalResultSource.NOT_NEUTRAL_TEXT
-            else 0.0
         )
-        difference = home_rating + advantage - away_rating
+        advantage = np.where(
+            plays_at_home, CrowdTipPriorCalculation.HOME_ADVANTAGE, 0.0
+        )
+        rating_gap = matches["home_rating"] + advantage - matches["away_rating"]
         return 1.0 / (
             1.0
             + CrowdTipPriorCalculation.LOGISTIC_BASE
-            ** (-difference / CrowdTipPriorCalculation.RATING_SCALE)
+            ** (-rating_gap / CrowdTipPriorCalculation.RATING_SCALE)
         )
 
-    def _band_of(self, favourite_expectation: float) -> str | None:
+    def _band_of(self, favourite_chance: pd.Series) -> pd.Series:
         """Say which band a favourite of this strength falls into."""
         edges = CrowdTipPriorCalculation.BAND_EDGES
-        for lower, upper in zip(edges[:-1], edges[1:], strict=False):
-            if lower <= favourite_expectation < upper:
-                return f"{lower:.2f}_{min(upper, 1.0):.2f}"
-        return None
-
-    def _build_rows(
-        self, counts: dict[str, dict[tuple[int, int], int]]
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Mix the real results with the crowd preference, per band."""
-        heuristic = self._normalised_heuristic()
-        weight = CrowdTipPriorCalculation.HEURISTIC_WEIGHT
-        places = CrowdTipPriorCalculation.PROBABILITY_DECIMAL_PLACES
-
-        prior_rows: list[dict[str, Any]] = []
-        summary_rows: list[dict[str, Any]] = []
-        for band in sorted(counts):
-            counts_of_cell = counts[band]
-            match_count = sum(counts_of_cell.values())
-            distance = 0.0
-            most_likely_cell, highest_prior = (0, 0), -1.0
-            for cell in self._every_cell():
-                real = counts_of_cell.get(cell, 0) / match_count
-                expected_of_the_crowd = heuristic.get(cell, 0.0)
-                prior = (1.0 - weight) * real + weight * expected_of_the_crowd
-                distance += abs(real - expected_of_the_crowd)
-                if prior > highest_prior:
-                    most_likely_cell, highest_prior = cell, prior
-                prior_rows.append(
-                    {
-                        "favorite_band": band,
-                        "favorite_goals": cell[0],
-                        "underdog_goals": cell[1],
-                        "empirical_probability": round(real, places),
-                        "heuristic_probability": round(expected_of_the_crowd, places),
-                        "crowd_prior_probability": round(prior, places),
-                    }
-                )
-            summary_rows.append(
-                {
-                    "favorite_band": band,
-                    "matches": match_count,
-                    "crowd_distortion": round(0.5 * distance, places),
-                    "top_crowd_scoreline": (
-                        f"{most_likely_cell[0]}"
-                        f"{CrowdTipPriorCalculation.SCORELINE_SEPARATOR}"
-                        f"{most_likely_cell[1]}"
-                    ),
-                    "top_crowd_probability": round(highest_prior, places),
-                }
-            )
-        return prior_rows, summary_rows
-
-    def _every_cell(self) -> list[tuple[int, int]]:
-        """Every scoreline of the grid, from the favourite's point of view."""
-        highest = CrowdTipPriorCalculation.HIGHEST_GOALS_IN_THE_GRID
-        return [
-            (favorite_goals, underdog_goals)
-            for favorite_goals in range(highest + 1)
-            for underdog_goals in range(highest + 1)
+        names = [
+            f"{lower:.2f}_{min(upper, 1.0):.2f}"
+            for lower, upper in zip(edges[:-1], edges[1:], strict=False)
         ]
+        return pd.cut(
+            favourite_chance, bins=list(edges), labels=names, right=False
+        ).astype(object)
 
-    def _normalised_heuristic(self) -> dict[tuple[int, int], float]:
-        """Turn the crowd preference into probabilities that add up to one."""
-        weights = CrowdTipPriorCalculation.HEURISTIC_WEIGHT_OF_SCORELINE
-        total = sum(weights.values())
-        return {cell: weight / total for cell, weight in weights.items()}
+    def _every_scoreline_of_the_grid(self) -> pd.DataFrame:
+        """Every scoreline a tip may be given on, with the crowd weight on it."""
+        highest = CrowdTipPriorCalculation.HIGHEST_GOALS_IN_THE_GRID
+        goals = range(highest + 1)
+        grid = pd.MultiIndex.from_product(
+            [goals, goals], names=SCORELINE_KEYS
+        ).to_frame(index=False)
+
+        preference = pd.Series(CrowdTipPriorCalculation.HEURISTIC_WEIGHT_OF_SCORELINE)
+        weight_of_cell = (
+            preference.reindex(pd.MultiIndex.from_frame(grid)).fillna(0.0).to_numpy()
+        )
+        return grid.assign(heuristic_probability=weight_of_cell / preference.sum())
+
+    def _mix_the_crowd_preference_in(self, counted_cells: pd.DataFrame) -> pd.DataFrame:
+        """Blend what really happened with what the crowd likes to tip."""
+        matches_of_the_band = counted_cells.groupby("favorite_band")[
+            "matches_with_this_scoreline"
+        ].transform("sum")
+        really_happened = (
+            counted_cells["matches_with_this_scoreline"] / matches_of_the_band
+        )
+        crowd_weight = CrowdTipPriorCalculation.HEURISTIC_WEIGHT
+        return counted_cells.assign(
+            matches=matches_of_the_band,
+            empirical_probability=really_happened,
+            crowd_prior_probability=(1.0 - crowd_weight) * really_happened
+            + crowd_weight * counted_cells["heuristic_probability"],
+        )
+
+    def _summarise_every_band(self, prior_cells: pd.DataFrame) -> pd.DataFrame:
+        """Say per band how far the crowd sits from reality, and what it tips.
+
+        The distortion is the total variation distance, so half the summed
+        gap over the whole grid.
+        """
+        gap_to_reality = (
+            prior_cells["empirical_probability"] - prior_cells["heuristic_probability"]
+        ).abs()
+        grouped = prior_cells.assign(gap_to_reality=gap_to_reality).groupby(
+            "favorite_band", sort=True
+        )
+        summary = grouped.agg(
+            matches=("matches", "first"),
+            crowd_distortion=("gap_to_reality", "sum"),
+        )
+        most_tipped = prior_cells.loc[
+            grouped["crowd_prior_probability"].idxmax()
+        ].set_index("favorite_band")
+
+        places = CrowdTipPriorCalculation.PROBABILITY_DECIMAL_PLACES
+        separator = CrowdTipPriorCalculation.SCORELINE_SEPARATOR
+        return summary.assign(
+            crowd_distortion=(0.5 * summary["crowd_distortion"]).round(places),
+            top_crowd_scoreline=most_tipped["favorite_goals"].astype(str)
+            + separator
+            + most_tipped["underdog_goals"].astype(str),
+            top_crowd_probability=most_tipped["crowd_prior_probability"].round(places),
+        ).reset_index()
+
+    def _rounded_for_writing(self, prior_cells: pd.DataFrame) -> pd.DataFrame:
+        """Cut every probability down to the digits the file carries."""
+        places = CrowdTipPriorCalculation.PROBABILITY_DECIMAL_PLACES
+        probability_columns = [
+            "empirical_probability",
+            "heuristic_probability",
+            "crowd_prior_probability",
+        ]
+        return prior_cells.assign(
+            **{name: prior_cells[name].round(places) for name in probability_columns}
+        )
 
 
 if __name__ == "__main__":

@@ -11,10 +11,13 @@ as stale rather than carried forward for ever.
 """
 
 from datetime import date
-from typing import Any
+
+import pandas as pd
 
 from wmguru.helpers.constant import SquadValueCalculation
 from wmguru.helpers.utils import CsvFile
+
+SQUAD_KEYS = ["key_date", "country"]
 
 
 class SquadValueBuilder:
@@ -27,15 +30,30 @@ class SquadValueBuilder:
             How many country and key date rows the file holds. A country with
             too few valued players on a key date does not get a row at all.
         """
-        rows = self._build_rows()
+        valuations = self._read_valuations()
+        first_key_date = date(
+            SquadValueCalculation.FIRST_KEY_DATE_YEAR,
+            SquadValueCalculation.KEY_DATE_MONTHS[0],
+            SquadValueCalculation.FIRST_DAY_OF_MONTH,
+        )
+        key_dates = self.key_dates_between(
+            first_key_date, valuations["valuation_date"].max().date()
+        )
+        worth_on_the_day = self.value_of_every_player_on_every_key_date(
+            valuations, key_dates
+        )
+        squads = self._sum_up_the_most_valuable_players(
+            worth_on_the_day.merge(self._read_citizenships(), on="player_identifier")
+        )
+
         output_file = CsvFile(
             SquadValueCalculation.SOURCE_FOLDER
             / SquadValueCalculation.OUTPUT_FILE_NAME,
             SquadValueCalculation.COLUMN_NAMES,
         )
-        output_file.write_rows(rows)
-        print(f"{len(rows)} country and key date rows -> {output_file.path}")
-        return len(rows)
+        output_file.write_table(squads)
+        print(f"{len(squads)} country and key date rows -> {output_file.path}")
+        return len(squads)
 
     def key_dates_between(self, first: date, last: date) -> list[date]:
         """List the first of January and the first of July in a range.
@@ -48,136 +66,149 @@ class SquadValueBuilder:
         Returns:
             Every half year mark inside the range, in order.
         """
-        key_dates: list[date] = []
-        for year in range(first.year, last.year + 1):
-            for month in SquadValueCalculation.KEY_DATE_MONTHS:
-                candidate = date(year, month, SquadValueCalculation.FIRST_DAY_OF_MONTH)
-                if first <= candidate <= last:
-                    key_dates.append(candidate)
-        return key_dates
+        return [
+            half_year.date()
+            for half_year in pd.date_range(
+                start=first,
+                end=last,
+                freq=SquadValueCalculation.KEY_DATE_FREQUENCY,
+            )
+        ]
 
-    def value_on(
-        self, valuations: list[tuple[date, int]], key_date: date
-    ) -> int | None:
-        """Read what a player was worth on a key date.
+    def value_of_every_player_on_every_key_date(
+        self, valuations: pd.DataFrame, key_dates: list[date]
+    ) -> pd.DataFrame:
+        """Look up what every player was worth on every one of the key dates.
 
-        Args:
-            valuations: The value history of one player, sorted by date.
-            key_date: The day the value is wanted for.
+        This is an as of join, not a search: the newest valuation dated on or
+        before the key date wins, one dated after it is never seen, and one
+        older than the look back drops out as stale rather than being carried
+        forward for ever.
 
         Returns:
-            The newest value dated on or before the key date, or None when
-            there is none or the newest one is older than the look back. A
-            stale value would pretend to know something it cannot.
+            One row per player and key date the player really had a value on.
         """
-        newest: tuple[date, int] | None = None
-        for valuation_date, value in valuations:
-            if valuation_date > key_date:
-                break
-            newest = (valuation_date, value)
-        if newest is None:
-            return None
-        if (key_date - newest[0]).days > SquadValueCalculation.LOOK_BACK_IN_DAYS:
-            return None
-        return newest[1]
-
-    def _build_rows(self) -> list[list[Any]]:
-        """Build one row per country and key date, over the whole history."""
-        citizenship_of_player = self._read_citizenships()
-        valuations_of_player = self._read_valuations()
-        newest_valuation_date = max(
-            history[-1][0] for history in valuations_of_player.values()
-        )
-
-        rows: list[list[Any]] = []
-        first_key_date = date(
-            SquadValueCalculation.FIRST_KEY_DATE_YEAR,
-            SquadValueCalculation.KEY_DATE_MONTHS[0],
-            SquadValueCalculation.FIRST_DAY_OF_MONTH,
-        )
-        for key_date in self.key_dates_between(first_key_date, newest_valuation_date):
-            values_of_country = self._collect_values_on(
-                key_date, citizenship_of_player, valuations_of_player
+        every_pairing = (
+            pd.MultiIndex.from_product(
+                [
+                    pd.to_datetime(pd.Series(key_dates)).astype(
+                        valuations["valuation_date"].dtype
+                    ),
+                    valuations["player_identifier"].unique(),
+                ],
+                names=SQUAD_KEYS[:1] + ["player_identifier"],
             )
-            rows.extend(self._build_rows_of_one_key_date(key_date, values_of_country))
-        return rows
+            .to_frame(index=False)
+            .sort_values("key_date", kind="stable")
+        )
+        return pd.merge_asof(
+            every_pairing,
+            valuations.sort_values(["valuation_date", "value"], kind="stable"),
+            left_on="key_date",
+            right_on="valuation_date",
+            by="player_identifier",
+            tolerance=pd.Timedelta(days=SquadValueCalculation.LOOK_BACK_IN_DAYS),
+            direction="backward",
+        ).dropna(subset=["value"])
 
-    def _collect_values_on(
-        self,
-        key_date: date,
-        citizenship_of_player: dict[int, str],
-        valuations_of_player: dict[int, list[tuple[date, int]]],
-    ) -> dict[str, list[int]]:
-        """Collect every usable player value per country on one key date."""
-        values_of_country: dict[str, list[int]] = {}
-        for player_identifier, valuations in valuations_of_player.items():
-            country = citizenship_of_player.get(player_identifier)
-            if country is None:
-                continue
-            value = self.value_on(valuations, key_date)
-            if value is not None:
-                values_of_country.setdefault(country, []).append(value)
-        return values_of_country
+    def _sum_up_the_most_valuable_players(
+        self, worth_on_the_day: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Add the squad of every country and key date up, thin ones dropped."""
+        valued_players = worth_on_the_day.groupby(SQUAD_KEYS)["value"].transform("size")
+        well_covered = worth_on_the_day[
+            valued_players >= SquadValueCalculation.SMALLEST_USABLE_PLAYER_COUNT
+        ]
+        most_valuable_first = well_covered.sort_values(
+            [*SQUAD_KEYS, "value"], ascending=[True, True, False], kind="stable"
+        )
+        is_in_the_squad = (
+            most_valuable_first.groupby(SQUAD_KEYS, sort=False).cumcount()
+            < SquadValueCalculation.SQUAD_SIZE
+        )
+        squads = (
+            most_valuable_first[is_in_the_squad]
+            .groupby(SQUAD_KEYS, sort=False)
+            .agg(squad_value_eur=("value", "sum"), players=("value", "size"))
+        )
+        return (
+            squads.join(self._order_the_countries_were_collected_in(well_covered))
+            .reset_index()
+            .sort_values(["key_date", "first_player_of_the_country"], kind="stable")
+            .assign(
+                as_of_date=lambda squad: squad["key_date"].dt.strftime(
+                    SquadValueCalculation.KEY_DATE_FORMAT
+                ),
+                squad_value_eur=lambda squad: squad["squad_value_eur"].astype(int),
+            )
+        )
 
-    def _build_rows_of_one_key_date(
-        self, key_date: date, values_of_country: dict[str, list[int]]
-    ) -> list[list[Any]]:
-        """Build the rows of one key date, dropping thinly covered countries."""
-        rows: list[list[Any]] = []
-        for country, values in values_of_country.items():
-            if len(values) < SquadValueCalculation.SMALLEST_USABLE_PLAYER_COUNT:
-                continue
-            squad = sorted(values, reverse=True)[: SquadValueCalculation.SQUAD_SIZE]
-            rows.append([key_date.isoformat(), country, sum(squad), len(squad)])
-        return rows
+    def _order_the_countries_were_collected_in(
+        self, well_covered: pd.DataFrame
+    ) -> pd.Series:
+        """Rank the countries of a key date by the first player each brought.
 
-    def _read_citizenships(self) -> dict[int, str]:
+        The file has always listed a country as soon as one of its players
+        turned up, so the order of the rows follows the source file rather
+        than the alphabet.
+        """
+        return (
+            well_covered.groupby(SQUAD_KEYS)["player_first_seen"]
+            .min()
+            .rename("first_player_of_the_country")
+        )
+
+    def _read_citizenships(self) -> pd.DataFrame:
         """Read the country every player may play for.
 
         A player without a citizenship in the source is left out, and a
         Transfermarkt spelling is turned into the name the squads use.
         """
-        source_file = CsvFile(
+        players = CsvFile(
             SquadValueCalculation.SOURCE_FOLDER / SquadValueCalculation.PLAYER_FILE_NAME
+        ).read_table()
+        country = players[SquadValueCalculation.CITIZENSHIP_COLUMN].str.strip()
+        named = players.assign(
+            player_identifier=pd.to_numeric(
+                players[SquadValueCalculation.PLAYER_IDENTIFIER_COLUMN]
+            ),
+            country=country.replace(SquadValueCalculation.COUNTRY_ALIASES),
         )
-        citizenship_of_player: dict[int, str] = {}
-        for player in source_file.read_rows():
-            country = (
-                player.get(SquadValueCalculation.CITIZENSHIP_COLUMN) or ""
-            ).strip()
-            if not country:
-                continue
-            player_identifier = int(
-                player[SquadValueCalculation.PLAYER_IDENTIFIER_COLUMN]
-            )
-            citizenship_of_player[player_identifier] = (
-                SquadValueCalculation.COUNTRY_ALIASES.get(country, country)
-            )
-        return citizenship_of_player
+        return named[country != ""][["player_identifier", "country"]].drop_duplicates(
+            subset="player_identifier", keep="last"
+        )
 
-    def _read_valuations(self) -> dict[int, list[tuple[date, int]]]:
-        """Read the value history of every player, sorted by date."""
-        source_file = CsvFile(
+    def _read_valuations(self) -> pd.DataFrame:
+        """Read the value history of every player, with the row it first had.
+
+        Only a whole number counts as a value, the way the source writes one.
+        """
+        source = CsvFile(
             SquadValueCalculation.SOURCE_FOLDER
             / SquadValueCalculation.VALUATION_FILE_NAME
+        ).read_table()
+        is_a_whole_number = source[SquadValueCalculation.VALUE_COLUMN].str.isdigit()
+        valuations = source[is_a_whole_number].assign(
+            player_identifier=pd.to_numeric(
+                source.loc[
+                    is_a_whole_number, SquadValueCalculation.PLAYER_IDENTIFIER_COLUMN
+                ]
+            ),
+            valuation_date=pd.to_datetime(
+                source.loc[is_a_whole_number, SquadValueCalculation.DATE_COLUMN]
+            ),
+            value=pd.to_numeric(
+                source.loc[is_a_whole_number, SquadValueCalculation.VALUE_COLUMN]
+            ),
         )
-        valuations_of_player: dict[int, list[tuple[date, int]]] = {}
-        for valuation in source_file.read_rows():
-            value = valuation.get(SquadValueCalculation.VALUE_COLUMN) or ""
-            if not value.isdigit():
-                continue
-            player_identifier = int(
-                valuation[SquadValueCalculation.PLAYER_IDENTIFIER_COLUMN]
+        first_row_of_player = valuations.drop_duplicates(
+            subset="player_identifier", keep="first"
+        )["player_identifier"]
+        return valuations.assign(
+            player_first_seen=valuations["player_identifier"].map(
+                pd.Series(range(len(first_row_of_player)), index=first_row_of_player)
             )
-            valuations_of_player.setdefault(player_identifier, []).append(
-                (
-                    date.fromisoformat(valuation[SquadValueCalculation.DATE_COLUMN]),
-                    int(value),
-                )
-            )
-        for history in valuations_of_player.values():
-            history.sort()
-        return valuations_of_player
+        )[["player_identifier", "valuation_date", "value", "player_first_seen"]]
 
 
 if __name__ == "__main__":
