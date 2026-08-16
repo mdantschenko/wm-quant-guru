@@ -22,7 +22,7 @@ class ClubEloFetcher:
         """Fetch every snapshot that is not on disk yet, return the file count."""
         ClubEloSource.OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
         written_count = 0
-        for snapshot_day in self._snapshot_days(today):
+        for snapshot_day in self._list_the_snapshot_days(today):
             if self.fetch_one_snapshot(snapshot_day):
                 written_count += 1
         print(f"-> {ClubEloSource.OUTPUT_FOLDER}")
@@ -49,7 +49,7 @@ class ClubEloFetcher:
         print(f"  OK    {snapshot_day} ({club_count} clubs)")
         return True
 
-    def _snapshot_days(self, today: date) -> list[str]:
+    def _list_the_snapshot_days(self, today: date) -> list[str]:
         """List one day per year, plus today when it is not one of them anyway."""
         days = [
             f"{year}-{ClubEloSource.SNAPSHOT_MONTH_AND_DAY}"

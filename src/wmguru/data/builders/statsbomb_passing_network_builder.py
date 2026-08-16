@@ -109,7 +109,9 @@ class StatsBombPassingNetworkBuilder:
                     "game_id": match[StatsBombOpenDataSource.MATCH_IDENTIFIER_FIELD],
                     "competition": competition.competition_name,
                     "season": competition.season_name,
-                    "date": self._statsbomb_reader.date_of(match),
+                    "date": self._statsbomb_reader.read_the_day_a_match_was_played(
+                        match
+                    ),
                     "team": team_name,
                     "opponent": opponent_name,
                     "is_home": int(team_name == home_team),
@@ -165,10 +167,10 @@ class StatsBombPassingNetworkBuilder:
         return team_name, TeamPass(
             passer_name=passer_name,
             receiver_name=self._receiver_name_of(pass_details, was_successful),
-            start_x_in_metres=self._along_the_pitch(start_location[0]),
-            start_y_in_metres=self._across_the_pitch(start_location[1]),
-            end_x_in_metres=self._along_the_pitch(end_location[0]),
-            end_y_in_metres=self._across_the_pitch(end_location[1]),
+            start_x_in_metres=self._length_on_our_pitch(start_location[0]),
+            start_y_in_metres=self._width_on_our_pitch(start_location[1]),
+            end_x_in_metres=self._length_on_our_pitch(end_location[0]),
+            end_y_in_metres=self._width_on_our_pitch(end_location[1]),
             was_successful=was_successful,
         )
 
@@ -185,7 +187,7 @@ class StatsBombPassingNetworkBuilder:
             or ""
         )
 
-    def _along_the_pitch(self, distance: float) -> float:
+    def _length_on_our_pitch(self, distance: float) -> float:
         """Convert a length onto the pitch everything else is counted on."""
         return (
             distance
@@ -193,7 +195,7 @@ class StatsBombPassingNetworkBuilder:
             * PitchGeometry.LENGTH_IN_METRES
         )
 
-    def _across_the_pitch(self, distance: float) -> float:
+    def _width_on_our_pitch(self, distance: float) -> float:
         """Convert a width onto the pitch everything else is counted on."""
         return (
             distance

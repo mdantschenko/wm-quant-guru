@@ -9,7 +9,6 @@ Two group by passes do the whole thing: one over the season to get the scale,
 one over the team to get its average and its swing.
 """
 
-import numpy as np
 import pandas as pd
 
 from wmguru.helpers.constant import (
@@ -112,23 +111,6 @@ class TeamStyleStabilityBuilder:
             summary["matches"] >= TeamStyleStabilityCalculation.MINIMUM_MATCHES
         )
         return summary[enough_matches].reset_index().sort_values(TEAM_KEYS)
-
-    def swing_of(self, values: pd.Series, scale: tuple[float, float] | None) -> float:
-        """Measure how much one dimension of one team swung.
-
-        Args:
-            values: What the team did in that dimension, one entry per match.
-            scale: The middle and the spread of the whole season, or None
-                when the season gave too few values to say.
-
-        Returns:
-            The spread of the standardised values, or not a number when the
-            season could not be standardised at all.
-        """
-        if scale is None or not scale[1]:
-            return np.nan
-        middle, spread = scale
-        return float(((values - middle) / spread).std(ddof=0))
 
 
 if __name__ == "__main__":

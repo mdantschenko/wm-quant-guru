@@ -113,8 +113,8 @@ class RefereeEscalationBuilder:
             The ratio of each referee who took charge of enough matches, and
             one row per referee for the file.
         """
-        fouls_of_match = self._both_teams_together(fouls_of_team)
-        cards_of_match = self._both_teams_together(cards_of_team)
+        fouls_of_match = self._add_both_teams_of_each_match_together(fouls_of_team)
+        cards_of_match = self._add_both_teams_of_each_match_together(cards_of_team)
         totals: dict[str, list[int]] = {}
         for game_identifier, facts in match_facts.items():
             if not facts.referee_identifier:
@@ -146,7 +146,7 @@ class RefereeEscalationBuilder:
             )
         return strictness, sorted(rows, key=lambda one: -float(one["cards_per_foul"]))
 
-    def _both_teams_together(
+    def _add_both_teams_of_each_match_together(
         self, counts: dict[tuple[str, str], int]
     ) -> dict[str, int]:
         """Add the two teams of each match into one count per match."""
@@ -166,7 +166,9 @@ class RefereeEscalationBuilder:
     ) -> list[dict[str, Any]]:
         """Average the cards over every combination of the two bands."""
         foul_scales = self._foul_scales_of_every_season(fouls_of_team, match_facts)
-        strictness_scale = self._scale_of(list(strictness.values()))
+        strictness_scale = self._measure_the_middle_and_the_spread(
+            list(strictness.values())
+        )
 
         cells: dict[tuple[str, str], list[float]] = {}
         for (game_identifier, team_name), fouls in fouls_of_team.items():
@@ -178,8 +180,10 @@ class RefereeEscalationBuilder:
                 continue
             cell = cells.setdefault(
                 (
-                    self._band_of(fouls, foul_scales[season_key]),
-                    self._band_of(
+                    self._whether_it_is_high_medium_or_low(
+                        fouls, foul_scales[season_key]
+                    ),
+                    self._whether_it_is_high_medium_or_low(
                         strictness[facts.referee_identifier], strictness_scale
                     ),
                 ),
@@ -205,18 +209,22 @@ class RefereeEscalationBuilder:
                 (facts.competition_identifier, facts.season_name), []
             ).append(float(fouls))
         return {
-            season_key: self._scale_of(values)
+            season_key: self._measure_the_middle_and_the_spread(values)
             for season_key, values in values_of_season.items()
             if len(values) >= RefereeEscalationCalculation.MINIMUM_VALUES_FOR_A_SCALE
         }
 
-    def _scale_of(self, values: list[float]) -> tuple[float, float]:
+    def _measure_the_middle_and_the_spread(
+        self, values: list[float]
+    ) -> tuple[float, float]:
         """The middle and the spread a value is standardised with."""
         if len(values) < RefereeEscalationCalculation.MINIMUM_VALUES_FOR_A_SCALE:
             return 0.0, 0.0
         return mean(values), pstdev(values)
 
-    def _band_of(self, value: float, scale: tuple[float, float]) -> str:
+    def _whether_it_is_high_medium_or_low(
+        self, value: float, scale: tuple[float, float]
+    ) -> str:
         """Say whether a value is high, medium or low for its season."""
         middle, spread = scale
         standardised = (value - middle) / spread if spread else 0.0

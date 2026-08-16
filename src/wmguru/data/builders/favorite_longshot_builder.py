@@ -302,20 +302,22 @@ class FavoriteLongshotBuilder:
             favorite=[
                 FavoriteLongshotCalculation.OUTCOME_NAMES[one] for one in favorite
             ],
-            implied_favorite_probability=self._picked_out(without_the_margin, favorite),
+            implied_favorite_probability=self._the_value_of_the_wanted_outcome(
+                without_the_margin, favorite
+            ),
             favorite_won=favorite_won.astype(int),
-            favorite_odds=self._picked_out(odds, favorite),
-            favorite_band=self._band_of(
+            favorite_odds=self._the_value_of_the_wanted_outcome(odds, favorite),
+            favorite_band=self._which_band_the_favourite_falls_into(
                 pd.Series(
-                    self._picked_out(without_the_margin, favorite),
+                    self._the_value_of_the_wanted_outcome(without_the_margin, favorite),
                     index=priced_matches.index,
                 )
             ),
             favorite_profit=self._profit_of(
-                self._picked_out(odds, favorite), favorite_won
+                self._the_value_of_the_wanted_outcome(odds, favorite), favorite_won
             ),
             longshot_profit=self._profit_of(
-                self._picked_out(odds, longshot), longshot_won
+                self._the_value_of_the_wanted_outcome(odds, longshot), longshot_won
             ),
         )
         return (
@@ -324,7 +326,7 @@ class FavoriteLongshotBuilder:
             .reset_index(drop=True)
         )
 
-    def _picked_out(
+    def _the_value_of_the_wanted_outcome(
         self, of_every_outcome: np.ndarray, wanted: np.ndarray
     ) -> np.ndarray:
         """Take one of the three outcome values out of every row."""
@@ -335,7 +337,9 @@ class FavoriteLongshotBuilder:
         stake = FavoriteLongshotCalculation.ONE_UNIT_STAKE
         return np.where(was_won, odds * stake - stake, -stake)
 
-    def _band_of(self, favorite_probability: pd.Series) -> pd.Series:
+    def _which_band_the_favourite_falls_into(
+        self, favorite_probability: pd.Series
+    ) -> pd.Series:
         """Say which band a favourite of this strength falls into."""
         edges = FavoriteLongshotCalculation.BAND_EDGES
         names = [

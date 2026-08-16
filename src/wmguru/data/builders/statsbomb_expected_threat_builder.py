@@ -114,7 +114,7 @@ class StatsBombExpectedThreatBuilder:
             StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
         ]
         shared_columns = {
-            "date": self._statsbomb_reader.date_of(match),
+            "date": self._statsbomb_reader.read_the_day_a_match_was_played(match),
             "competition": competition.competition_name,
             "season": competition.season_name,
         }
@@ -131,7 +131,7 @@ class StatsBombExpectedThreatBuilder:
         per_team: dict[str, list[float]],
     ) -> None:
         """Add what one move was worth to the player and to the team."""
-        cells = self._cells_of(event, grid)
+        cells = self._which_cells_the_move_ran_between(event, grid)
         if cells is None:
             return
         gained = grid.gain_between(cells[0], cells[1])
@@ -142,11 +142,11 @@ class StatsBombExpectedThreatBuilder:
             StatsBombOpenDataSource.NAME_FIELD
         )
         if player_name and team_name:
-            self._add(per_player, (player_name, team_name), gained)
+            self._count_one_valued_move(per_player, (player_name, team_name), gained)
         if team_name:
-            self._add(per_team, team_name, gained)
+            self._count_one_valued_move(per_team, team_name, gained)
 
-    def _cells_of(
+    def _which_cells_the_move_ran_between(
         self, event: dict[str, Any], grid: ExpectedThreatGrid
     ) -> tuple[int, int] | None:
         """Say which cells a completed move ran between, or None if it was none.
@@ -161,11 +161,13 @@ class StatsBombExpectedThreatBuilder:
         end_location = self._end_location_of(event)
         if not end_location:
             return None
-        start_point = self._statsbomb_reader.in_metres(start_location)
-        end_point = self._statsbomb_reader.in_metres(end_location)
+        start_point = self._statsbomb_reader.point_on_our_pitch_in_metres(
+            start_location
+        )
+        end_point = self._statsbomb_reader.point_on_our_pitch_in_metres(end_location)
         return (
-            grid.cell_of(start_point[0], start_point[1]),
-            grid.cell_of(end_point[0], end_point[1]),
+            grid.which_cell_the_place_falls_into(start_point[0], start_point[1]),
+            grid.which_cell_the_place_falls_into(end_point[0], end_point[1]),
         )
 
     def _end_location_of(self, event: dict[str, Any]) -> list[float] | None:
@@ -184,7 +186,9 @@ class StatsBombExpectedThreatBuilder:
             )
         return None
 
-    def _add(self, totals: dict[Any, list[float]], key: Any, gained: float) -> None:
+    def _count_one_valued_move(
+        self, totals: dict[Any, list[float]], key: Any, gained: float
+    ) -> None:
         """Add one valued move to a running total."""
         total = totals.setdefault(key, [0.0, 0.0])
         total[0] += gained

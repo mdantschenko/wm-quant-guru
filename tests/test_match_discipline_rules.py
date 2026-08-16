@@ -125,8 +125,8 @@ def test_every_card_of_both_sides_is_in_the_total():
 
 def test_a_match_where_nobody_fouled_gives_zeros_rather_than_nothing():
     summary = MatchDisciplineCounter().summarise_both_sides(
-        MatchDisciplineCounter().empty_counter(),
-        MatchDisciplineCounter().empty_counter(),
+        MatchDisciplineCounter().start_a_counter_at_zero(),
+        MatchDisciplineCounter().start_a_counter_at_zero(),
     )
 
     assert summary["home_fouls"] == 0

@@ -17,9 +17,7 @@ from wmguru.helpers.constant import RefereeProfileCalculation
 
 def k_factor_of(tournament_name: str) -> float:
     """Read the K factor of one competition, out of the column of them."""
-    return float(
-        EloRatingBuilder().k_factor_of(pd.Series([tournament_name])).iloc[0]
-    )
+    return float(EloRatingBuilder().k_factor_of(pd.Series([tournament_name])).iloc[0])
 
 
 def goal_multiplier_of(goal_difference: int) -> float:
@@ -173,7 +171,9 @@ def test_a_missing_card_count_is_read_as_zero():
     builder = RefereeProfileBuilder()
     matches = make_tournament_matches()
 
-    added_up = builder._added_up(matches, RefereeProfileCalculation.YELLOW_CARD_COLUMNS)
+    added_up = builder._sum_of_the_named_columns(
+        matches, RefereeProfileCalculation.YELLOW_CARD_COLUMNS
+    )
 
     assert list(added_up) == [3.0, 2.0, 2.0, 0.0]
 

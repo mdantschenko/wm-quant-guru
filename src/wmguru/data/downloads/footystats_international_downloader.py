@@ -93,7 +93,7 @@ class FootyStatsInternationalDownloader:
                 f"{int(season['id'])}",
                 timeout_in_seconds=FootyStatsInternationalSource.TIMEOUT_IN_SECONDS,
             )
-            if payload is None or not self._holds_expected_header(payload):
+            if payload is None or not self._is_a_real_csv_file(payload):
                 failed_count += 1
                 print(f"  FAIL  {competition_name} {season_name}", flush=True)
                 continue
@@ -113,7 +113,7 @@ class FootyStatsInternationalDownloader:
             return f"{text[:4]}-{text[4:]}"
         return text
 
-    def _holds_expected_header(self, payload: bytes) -> bool:
+    def _is_a_real_csv_file(self, payload: bytes) -> bool:
         """Return True when the answer is a real CSV file and not a web page."""
         first_bytes = payload[
             : FootyStatsInternationalSource.HEADER_SEARCH_LENGTH_IN_BYTES

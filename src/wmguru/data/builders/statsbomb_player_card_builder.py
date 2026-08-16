@@ -82,7 +82,7 @@ class StatsBombPlayerCardBuilder:
         away_team = match[StatsBombOpenDataSource.AWAY_TEAM_FIELD][
             StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
         ]
-        match_date = self._statsbomb_reader.date_of(match)
+        match_date = self._statsbomb_reader.read_the_day_a_match_was_played(match)
 
         rows: list[dict[str, Any]] = []
         for player_name, counter in counters.items():

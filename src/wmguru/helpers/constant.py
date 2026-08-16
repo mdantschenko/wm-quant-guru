@@ -632,6 +632,33 @@ class OpenLigaDatabaseSource:
     )
 
 
+class PreparedTablePath:
+    """Where the tables live that are prepared once and read many times.
+
+    Turning the raw sources into the shape every builder groups over costs
+    minutes and gives the same answer every time, so it is done once by the
+    preprocessing step and written down. A builder then reads a table that is
+    already in the right shape rather than parsing hundreds of megabytes of
+    text again.
+
+    The step is run by hand, not by a builder, so nobody is surprised by a
+    long run and nobody silently works on a stale table. Run it again
+    whenever a raw source changes.
+
+    Attributes:
+        FILE_SUFFIX: Parquet rather than CSV, because it keeps the column
+            types and reads back in a fraction of the time.
+    """
+
+    FOLDER: Path = ProjectPath.DATA_ROOT / "Prepared Tables"
+    FILE_SUFFIX: str = ".parquet"
+    WYSCOUT_ACTION_FILE: Path = FOLDER / ("wyscout_actions" + FILE_SUFFIX)
+    WYSCOUT_MATCH_IDENTITY_FILE: Path = FOLDER / (
+        "wyscout_match_identities" + FILE_SUFFIX
+    )
+    PREPARE_COMMAND: str = "python -m wmguru.preprocessing.wyscout_action_table_builder"
+
+
 class CsvFileSetting:
     """How every CSV file the project writes is opened.
 
@@ -1574,6 +1601,19 @@ class WyscoutEventFile:
     ACTION_END_Y_COLUMN: str = "end_y"
     ACTION_PERIOD_COLUMN: str = "period_id"
     ACTION_SECOND_COLUMN: str = "time_seconds"
+    ACTION_COLUMNS_TO_READ: tuple[str, ...] = (
+        "game_id",
+        "team_id",
+        "player_id",
+        "type_name",
+        "result_name",
+        "start_x",
+        "start_y",
+        "end_x",
+        "end_y",
+        "period_id",
+        "time_seconds",
+    )
     SUCCESSFUL_RESULT_NAME: str = "success"
     OWN_GOAL_RESULT_NAME: str = "owngoal"
 

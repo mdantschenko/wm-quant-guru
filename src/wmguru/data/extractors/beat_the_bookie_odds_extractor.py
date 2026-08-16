@@ -56,7 +56,7 @@ class BeatTheBookieOddsExtractor:
                     competition_counter[league_name] += 1
 
         CsvFile(target_file, tuple(header)).write_rows(kept_rows)
-        self._report(kept_rows, header, competition_counter, target_file)
+        self._report_what_came_out(kept_rows, header, competition_counter, target_file)
         return len(kept_rows)
 
     def extract_opening_and_closing_odds(
@@ -73,7 +73,7 @@ class BeatTheBookieOddsExtractor:
             ) as reader,
             output_file.writing_writer() as writer,
         ):
-            columns_of_outcome = self._map_columns(next(reader))
+            columns_of_outcome = self._find_the_columns_of_every_bookmaker(next(reader))
             for row in reader:
                 match_identifier = row[
                     BeatTheBookieSource.MATCH_IDENTIFIER_POSITION
@@ -87,7 +87,11 @@ class BeatTheBookieOddsExtractor:
                 }
                 if not any(summary.has_any_odds for summary in summaries.values()):
                     continue
-                writer.writerow(self._build_row(match_identifier, details, summaries))
+                writer.writerow(
+                    self._build_the_row_of_one_match(
+                        match_identifier, details, summaries
+                    )
+                )
                 written_count += 1
         print(f"{written_count} matches with opening and closing odds -> {target_file}")
         return written_count
@@ -127,7 +131,9 @@ class BeatTheBookieOddsExtractor:
         """Step over the first line, which names the columns."""
         next(reader)
 
-    def _map_columns(self, header: list[str]) -> dict[str, list[list[int]]]:
+    def _find_the_columns_of_every_bookmaker(
+        self, header: list[str]
+    ) -> dict[str, list[list[int]]]:
         """Map every outcome to its column positions per bookmaker, in time order.
 
         A column is named like home_b3_17, that is outcome, bookmaker and hour.
@@ -161,7 +167,7 @@ class BeatTheBookieOddsExtractor:
         opening_odds: list[float] = []
         closing_odds: list[float] = []
         for columns in columns_of_bookmakers:
-            series = self._read_series(row, columns)
+            series = self._read_the_day_and_value_pairs(row, columns)
             if series:
                 opening_odds.append(series[0])
                 closing_odds.append(series[-1])
@@ -176,7 +182,9 @@ class BeatTheBookieOddsExtractor:
             bookmaker_count=len(closing_odds),
         )
 
-    def _read_series(self, row: list[str], columns: list[int]) -> list[float]:
+    def _read_the_day_and_value_pairs(
+        self, row: list[str], columns: list[int]
+    ) -> list[float]:
         """Read the day and value pairs, or nothing when the query gave nothing back.
 
         Odds of one or below are not a price, they mark an empty cell.
@@ -206,7 +214,7 @@ class BeatTheBookieOddsExtractor:
             + tuple(f"max_close_{outcome}" for outcome in BeatTheBookieSource.OUTCOMES)
         )
 
-    def _build_row(
+    def _build_the_row_of_one_match(
         self,
         match_identifier: str,
         details: list[str],
@@ -241,7 +249,7 @@ class BeatTheBookieOddsExtractor:
         ) as file_handle:
             yield csv.reader(file_handle)
 
-    def _report(
+    def _report_what_came_out(
         self,
         rows: list[list[str]],
         header: list[str],
@@ -256,12 +264,16 @@ class BeatTheBookieOddsExtractor:
         if BeatTheBookieSource.MATCH_DATE_COLUMN not in header:
             return
         date_position = header.index(BeatTheBookieSource.MATCH_DATE_COLUMN)
-        years = Counter(self._year_of(row, date_position) for row in rows)
+        years = Counter(
+            self._read_the_year_of_the_date_column(row, date_position) for row in rows
+        )
         print("\nMatches per year:")
         for year in sorted(years):
             print(f"  {year}: {years[year]}")
 
-    def _year_of(self, row: list[str], date_position: int) -> str:
+    def _read_the_year_of_the_date_column(
+        self, row: list[str], date_position: int
+    ) -> str:
         """Read the year out of the date column."""
         found = re.match(BeatTheBookieSource.YEAR_PATTERN, row[date_position])
         return found.group(1) if found else BeatTheBookieSource.UNKNOWN_YEAR

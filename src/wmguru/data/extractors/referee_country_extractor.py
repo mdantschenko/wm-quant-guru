@@ -35,13 +35,17 @@ class RefereeCountryExtractor:
                     print(f"  FAIL  {tournament_name}")
                     continue
                 for match in matches:
-                    writer.writerow(self._build_row(tournament_name, match))
+                    writer.writerow(
+                        self._build_the_row_of_one_match(tournament_name, match)
+                    )
                     written_count += 1
                 print(f"  OK    {tournament_name}")
         print(f"{written_count} matches with a referee country -> {output_file.path}")
         return written_count
 
-    def _build_row(self, tournament_name: str, match: dict[str, Any]) -> list[Any]:
+    def _build_the_row_of_one_match(
+        self, tournament_name: str, match: dict[str, Any]
+    ) -> list[Any]:
         """Build one output row."""
         referee = match.get("referee") or {}
         country = referee.get("country") or {}

@@ -64,10 +64,10 @@ class EloRatingBuilder:
             np.select(
                 [
                     name == EloRatingCalculation.WORLD_CUP_NAME,
-                    self._holds_any_of(
+                    self._carries_any_of_these_parts(
                         lowered, EloRatingCalculation.QUALIFIER_NAME_PARTS
                     ),
-                    self._holds_any_of(
+                    self._carries_any_of_these_parts(
                         name, EloRatingCalculation.CONTINENTAL_FINALS_NAMES
                     ),
                     lowered == EloRatingCalculation.FRIENDLY_NAME,
@@ -83,7 +83,7 @@ class EloRatingBuilder:
             index=tournament_names.index,
         )
 
-    def _holds_any_of(
+    def _carries_any_of_these_parts(
         self, names: pd.Series, wanted_parts: tuple[str, ...]
     ) -> pd.Series:
         """Return True where a name carries any one of the given parts."""

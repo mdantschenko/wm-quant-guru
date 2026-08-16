@@ -91,7 +91,7 @@ class StatsBombPlayerMetricBuilder:
         away_team = match[StatsBombOpenDataSource.AWAY_TEAM_FIELD][
             StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
         ]
-        match_date = self._statsbomb_reader.date_of(match)
+        match_date = self._statsbomb_reader.read_the_day_a_match_was_played(match)
 
         rows: list[dict[str, Any]] = []
         for player_identifier, appearance in appearances.items():
@@ -111,10 +111,10 @@ class StatsBombPlayerMetricBuilder:
                     "player": appearance.player_name,
                     "role": role,
                     "minutes": appearance.minutes_played,
-                    **self._player_metric_calculator.build_row(
+                    **self._player_metric_calculator.build_the_columns_of_one_player(
                         counters.get(
                             player_identifier,
-                            self._player_metric_calculator.empty_counter(),
+                            self._player_metric_calculator.start_a_counter_at_zero(),
                         ),
                         role == PlayerMatchMetricFeature.GOALKEEPER_ROLE,
                     ),
@@ -133,7 +133,7 @@ class StatsBombPlayerMetricBuilder:
                 continue
             counter = counters.setdefault(
                 action.player_identifier,
-                self._player_metric_calculator.empty_counter(),
+                self._player_metric_calculator.start_a_counter_at_zero(),
             )
             self._player_metric_calculator.add_one_action(
                 counter,

@@ -75,7 +75,7 @@ def test_the_same_reader_keeps_the_uefa_club_competitions():
 def test_a_column_name_is_split_into_outcome_bookmaker_and_hour():
     header = ["match_id", "home_b1_2", "home_b1_1", "draw_b2_1", "away_b1_1", "other"]
 
-    columns_of_outcome = make_extractor()._map_columns(header)
+    columns_of_outcome = make_extractor()._find_the_columns_of_every_bookmaker(header)
 
     assert len(columns_of_outcome["home"]) == 1
     assert columns_of_outcome["draw"] == [[3]]
@@ -88,7 +88,7 @@ def test_the_hours_of_a_bookmaker_come_out_in_time_order():
     column_of_hour_one = 2
     header = ["match_id", "home_b1_2", "home_b1_1"]
 
-    columns_of_outcome = make_extractor()._map_columns(header)
+    columns_of_outcome = make_extractor()._find_the_columns_of_every_bookmaker(header)
 
     assert columns_of_outcome["home"] == [[column_of_hour_one, column_of_hour_two]]
 

@@ -107,7 +107,7 @@ class StatsBombMatchDisciplineBuilder:
         away_team = match[StatsBombOpenDataSource.AWAY_TEAM_FIELD][
             StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
         ]
-        shared_columns = self._match_columns_of(match, competition)
+        shared_columns = self._the_columns_both_files_share(match, competition)
 
         player_rows = [
             {
@@ -152,26 +152,30 @@ class StatsBombMatchDisciplineBuilder:
             card_name = self._statsbomb_reader.read_card_name_of(event)
             if not is_foul and card_name is None:
                 continue
-            counter = counters.setdefault(player_name, self._empty_counter_of(event))
+            counter = counters.setdefault(
+                player_name, self._start_a_counter_for_the_player_of(event)
+            )
             counter[EventSourceSetting.FOUL_NAME] += 1 if is_foul else 0
             if card_name is not None:
                 counter[card_name] += 1
         return counters
 
-    def _empty_counter_of(self, event: dict[str, Any]) -> dict[str, Any]:
+    def _start_a_counter_for_the_player_of(
+        self, event: dict[str, Any]
+    ) -> dict[str, Any]:
         """Build the counter of the player of one event, with their team."""
         return {
             "team": event.get(StatsBombOpenDataSource.TEAM_FIELD, {}).get(
                 StatsBombOpenDataSource.NAME_FIELD
             ),
-            **self._discipline_counter.empty_counter(),
+            **self._discipline_counter.start_a_counter_at_zero(),
         }
 
     def _add_up_one_side(
         self, counters: dict[str, dict[str, Any]], team_name: str
     ) -> dict[str, int]:
         """Add the players of one team up into a single counter."""
-        total = self._discipline_counter.empty_counter()
+        total = self._discipline_counter.start_a_counter_at_zero()
         for counter in counters.values():
             if counter["team"] != team_name:
                 continue
@@ -179,12 +183,12 @@ class StatsBombMatchDisciplineBuilder:
                 total[name] += counter[name]
         return total
 
-    def _match_columns_of(
+    def _the_columns_both_files_share(
         self, match: dict[str, Any], competition: StatsBombCompetition
     ) -> dict[str, Any]:
         """Build the columns both output files have in common."""
         return {
-            "date": self._statsbomb_reader.date_of(match),
+            "date": self._statsbomb_reader.read_the_day_a_match_was_played(match),
             "competition": competition.competition_name,
             "season": competition.season_name,
             "game_id": match[StatsBombOpenDataSource.MATCH_IDENTIFIER_FIELD],

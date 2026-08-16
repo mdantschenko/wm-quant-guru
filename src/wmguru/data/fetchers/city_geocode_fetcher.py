@@ -55,7 +55,7 @@ class CityGeocodeFetcher:
                 if place is None:
                     not_found_count += 1
                     continue
-                writer.writerow(self._build_row(city, country, place))
+                writer.writerow(self._build_the_row_of_one_city(city, country, place))
                 resolved_count += 1
                 self._report_progress(resolved_count)
         print(
@@ -121,7 +121,9 @@ class CityGeocodeFetcher:
                 return candidate
         return None
 
-    def _build_row(self, city: str, country: str, place: dict[str, Any]) -> list[Any]:
+    def _build_the_row_of_one_city(
+        self, city: str, country: str, place: dict[str, Any]
+    ) -> list[Any]:
         """Build one output row."""
         return [
             city,

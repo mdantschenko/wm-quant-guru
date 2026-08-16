@@ -55,9 +55,7 @@ class FootyStatsCompetitionDownloader:
                 f"{base_url}{competition_identifier}",
                 timeout_in_seconds=FootyStatsSource.TIMEOUT_IN_SECONDS,
             )
-            if payload is None or not self._holds_expected_header(
-                payload, header_marker
-            ):
+            if payload is None or not self._is_a_real_csv_file(payload, header_marker):
                 print(
                     f"  FAIL  {tournament_name} "
                     f"(competition {competition_identifier}, no usable file)"
@@ -69,7 +67,7 @@ class FootyStatsCompetitionDownloader:
             print(f"  OK    {tournament_name}.csv ({line_count} lines)")
         return written_count
 
-    def _holds_expected_header(self, payload: bytes, header_marker: bytes) -> bool:
+    def _is_a_real_csv_file(self, payload: bytes, header_marker: bytes) -> bool:
         """Return True when the answer is a real CSV file and not a web page."""
         first_bytes = payload[: FootyStatsSource.HEADER_SEARCH_LENGTH_IN_BYTES]
         return header_marker in first_bytes

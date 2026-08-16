@@ -175,7 +175,7 @@ class ConfederationCalibrationBuilder:
             index=matches.index,
         )
 
-    def _expectation_of(
+    def _what_the_rating_expected_of_the_home_side(
         self,
         home_rating: pd.Series,
         away_rating: pd.Series,
@@ -204,7 +204,7 @@ class ConfederationCalibrationBuilder:
 
     def _build_pair_rows(self, matches: pd.DataFrame) -> pd.DataFrame:
         """Average the residual of every pair of confederations, per era."""
-        expectation = self._expectation_of(
+        expectation = self._what_the_rating_expected_of_the_home_side(
             matches["home_rating"], matches["away_rating"], matches["was_neutral"]
         )
         scored = self._once_per_era_and_once_for_all_of_them(
@@ -288,7 +288,7 @@ class ConfederationCalibrationBuilder:
         )
 
         for _round in range(ConfederationCalibration.FITTING_ROUNDS):
-            expectation = self._expectation_of(
+            expectation = self._what_the_rating_expected_of_the_home_side(
                 matches["home_rating"] + matches["home_confederation"].map(offsets),
                 matches["away_rating"] + matches["away_confederation"].map(offsets),
                 matches["was_neutral"],

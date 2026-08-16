@@ -66,7 +66,7 @@ class WikipediaBaseCampDownloader:
             if line.startswith(WikipediaBaseCampSource.TABLE_ROW_MARKERS):
                 continue
             if team_code and line.startswith(WikipediaBaseCampSource.CELL_MARKER):
-                cell = self._clean_cell(line)
+                cell = self._without_the_wiki_markup(line)
                 if cell:
                     cells.append(cell)
         self._remember_team(rows, team_code, cells)
@@ -79,7 +79,7 @@ class WikipediaBaseCampDownloader:
         if team_code and cells:
             rows.append((team_code, cells[0], cells[1] if len(cells) > 1 else ""))
 
-    def _clean_cell(self, raw_cell: str) -> str:
+    def _without_the_wiki_markup(self, raw_cell: str) -> str:
         """Take references, templates, links and table markup out of a cell."""
         without_references = re.sub(
             WikipediaBaseCampSource.REFERENCE_PATTERN, "", raw_cell, flags=re.DOTALL

@@ -94,7 +94,9 @@ class WyscoutExpectedThreatBuilder:
             lookups
         ):
             for action in actions:
-                start_cell, end_cell = self._cells_of(empty_grid, action)
+                start_cell, end_cell = self._which_cells_the_action_ran_between(
+                    empty_grid, action
+                )
                 if action.kind in ExpectedThreatFeature.SHOT_KINDS:
                     shots[start_cell] += 1
                     goals[start_cell] += 1 if action.was_successful else 0
@@ -160,18 +162,22 @@ class WyscoutExpectedThreatBuilder:
             for action in actions:
                 if not self._is_a_completed_move(action):
                     continue
-                start_cell, end_cell = self._cells_of(grid, action)
+                start_cell, end_cell = self._which_cells_the_action_ran_between(
+                    grid, action
+                )
                 gained = grid.gain_between(start_cell, end_cell)
-                self._add(
+                self._count_one_valued_move(
                     per_player, (action.player_name, game, action.team_name), gained
                 )
-                self._add(per_team, (action.team_name, game), gained)
+                self._count_one_valued_move(per_team, (action.team_name, game), gained)
         return (
             self._build_player_rows(per_player, match_facts, lookups),
             self._build_team_rows(per_team, match_facts, lookups),
         )
 
-    def _add(self, totals: dict[Any, list[float]], key: Any, gained: float) -> None:
+    def _count_one_valued_move(
+        self, totals: dict[Any, list[float]], key: Any, gained: float
+    ) -> None:
         """Add one valued move to a running total."""
         total = totals.setdefault(key, [0.0, 0.0])
         total[0] += gained
@@ -192,7 +198,7 @@ class WyscoutExpectedThreatBuilder:
             rows.append(
                 {
                     EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.WYSCOUT_NAME,
-                    **self._match_columns_of(facts, lookups, team_name),
+                    **self._the_columns_both_files_share(facts, lookups, team_name),
                     "player": player_name,
                     "moves": int(moves),
                     "expected_threat_added": round(
@@ -222,7 +228,9 @@ class WyscoutExpectedThreatBuilder:
             facts = match_facts.get(game)
             if facts is None:
                 continue
-            match_columns = self._match_columns_of(facts, lookups, team_name)
+            match_columns = self._the_columns_both_files_share(
+                facts, lookups, team_name
+            )
             conceded = per_team.get((match_columns["opponent"], game), [0.0, 0.0])[0]
             places = ExpectedThreatFeature.TOTAL_DECIMAL_PLACES
             rows.append(
@@ -243,7 +251,7 @@ class WyscoutExpectedThreatBuilder:
             )
         return rows
 
-    def _match_columns_of(
+    def _the_columns_both_files_share(
         self,
         facts: WyscoutMatchFacts,
         lookups: WyscoutNameLookups,
@@ -270,13 +278,17 @@ class WyscoutExpectedThreatBuilder:
         """Return True when the ball was moved on and reached its target."""
         return action.kind in ExpectedThreatFeature.MOVE_KINDS and action.was_successful
 
-    def _cells_of(
+    def _which_cells_the_action_ran_between(
         self, grid: ExpectedThreatGrid, action: MatchAction
     ) -> tuple[int, int]:
         """Say which cell an action started in and which one it ended in."""
         return (
-            grid.cell_of(action.start_x_in_metres, action.start_y_in_metres),
-            grid.cell_of(action.end_x_in_metres, action.end_y_in_metres),
+            grid.which_cell_the_place_falls_into(
+                action.start_x_in_metres, action.start_y_in_metres
+            ),
+            grid.which_cell_the_place_falls_into(
+                action.end_x_in_metres, action.end_y_in_metres
+            ),
         )
 
 

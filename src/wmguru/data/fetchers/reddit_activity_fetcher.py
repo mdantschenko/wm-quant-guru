@@ -50,7 +50,9 @@ class RedditActivityFetcher:
                 if submissions is None:
                     print(f"  FAIL  {team_name}")
                     continue
-                writer.writerow(self._build_row(stamp, team_name, submissions))
+                writer.writerow(
+                    self._build_the_row_of_one_day(stamp, team_name, submissions)
+                )
                 written_count += 1
                 print(f"  OK    {team_name}: {len(submissions)} posts")
         print(f"-> {self._output_file.path}")
@@ -90,7 +92,7 @@ class RedditActivityFetcher:
         """Turn an ISO day into the start of that day in seconds since the epoch."""
         return int(datetime.fromisoformat(day).replace(tzinfo=UTC).timestamp())
 
-    def _build_row(
+    def _build_the_row_of_one_day(
         self, stamp: str, team_name: str, submissions: list[dict[str, Any]]
     ) -> list[Any]:
         """Build one output row."""

@@ -76,7 +76,7 @@ class WyscoutSubstitutionBuilder:
                 match.get(list_column, "")
             ):
                 rows.append(
-                    self._build_row(
+                    self._build_the_row_of_one_substitution(
                         match,
                         substitution,
                         team_names.get(team_identifier, team_identifier),
@@ -87,7 +87,7 @@ class WyscoutSubstitutionBuilder:
                 )
         return rows
 
-    def _build_row(
+    def _build_the_row_of_one_substitution(
         self,
         match: dict[str, str],
         substitution: dict[str, Any],

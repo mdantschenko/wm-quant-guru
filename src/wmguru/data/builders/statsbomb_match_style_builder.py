@@ -8,7 +8,7 @@ The file is written after every competition, so a stopped run picks up where it
 left off.
 """
 
-from typing import Any
+import pandas as pd
 
 from wmguru.helpers.constant import (
     EventSourceSetting,
@@ -16,7 +16,7 @@ from wmguru.helpers.constant import (
     StatsBombOpenDataSource,
     WebRequestSetting,
 )
-from wmguru.helpers.data_class import MatchIdentity, StatsBombCompetition
+from wmguru.helpers.data_class import StatsBombCompetition
 from wmguru.helpers.utils import (
     CsvFile,
     MatchStyleCalculator,
@@ -52,19 +52,23 @@ class StatsBombMatchStyleBuilder:
         Raises:
             SystemExit: When the competition list could not be loaded.
         """
-        own_rows = self._output_file.read_own_rows()
+        own_rows = self._output_file.read_own_table()
         open_competitions = self._statsbomb_reader.read_open_competitions(
             self._output_file.read_finished_keys()
         )
         print(f"Open competitions {len(open_competitions)}", flush=True)
 
         total_count = len(own_rows) + len(
-            self._output_file.read_rows_of_the_other_source()
+            self._output_file.read_the_table_of_the_other_source()
         )
         for competition in open_competitions:
-            own_rows.extend(self._build_rows_of_one_competition(competition))
-            self._match_style_calculator.fill_expected_goals_against(own_rows)
-            total_count = self._output_file.write_keeping_the_other_source(own_rows)
+            own_rows = pd.concat(
+                [own_rows, self._build_rows_of_one_competition(competition)],
+                ignore_index=True,
+            )
+            total_count = self._output_file.write_the_table_keeping_the_other_source(
+                own_rows
+            )
             print(
                 f"  SAVED  {competition.competition_name} "
                 f"{competition.season_name} (file now {total_count})",
@@ -75,43 +79,34 @@ class StatsBombMatchStyleBuilder:
 
     def _build_rows_of_one_competition(
         self, competition: StatsBombCompetition
-    ) -> list[dict[str, Any]]:
-        """Build the style rows of every match of one season."""
-        rows: list[dict[str, Any]] = []
-        for match in self._statsbomb_reader.read_matches(competition):
-            actions = [
-                action
-                for action in (
-                    self._statsbomb_reader.read_one_action(event)
-                    for event in self._statsbomb_reader.read_events(match)
-                )
-                if action is not None
-            ]
-            rows.extend(
-                self._match_style_calculator.calculate_rows_of_one_match(
-                    actions,
-                    self._identity_of(match, competition),
-                    EventSourceSetting.STATSBOMB_NAME,
-                    has_expected_goals=True,
-                )
-            )
-        return rows
+    ) -> pd.DataFrame:
+        """Build the style rows of every match of one season.
 
-    def _identity_of(
-        self, match: dict[str, Any], competition: StatsBombCompetition
-    ) -> MatchIdentity:
-        """Say which match a row belongs to."""
-        return MatchIdentity(
-            game_identifier=str(match[StatsBombOpenDataSource.MATCH_IDENTIFIER_FIELD]),
-            competition_name=competition.competition_name,
-            season_name=competition.season_name,
-            match_date=self._statsbomb_reader.date_of(match),
-            home_team_name=match[StatsBombOpenDataSource.HOME_TEAM_FIELD][
-                StatsBombOpenDataSource.HOME_TEAM_NAME_FIELD
+        The loop is over the match documents the endpoint hands over one at a
+        time, not over the actions inside them: those are collected into one
+        table and the calculator groups over all of them at once.
+        """
+        matches = self._statsbomb_reader.read_matches(competition)
+        actions = pd.concat(
+            [
+                self._statsbomb_reader.read_the_actions_of_one_match(match)
+                for match in matches
             ],
-            away_team_name=match[StatsBombOpenDataSource.AWAY_TEAM_FIELD][
-                StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
-            ],
+            ignore_index=True,
+        )
+        identities = pd.DataFrame(
+            [
+                self._statsbomb_reader.read_the_identity_of_one_match(
+                    match, competition
+                )
+                for match in matches
+            ]
+        )
+        return self._match_style_calculator.summarise_every_match(
+            actions,
+            identities,
+            EventSourceSetting.STATSBOMB_NAME,
+            has_expected_goals=True,
         )
 
 

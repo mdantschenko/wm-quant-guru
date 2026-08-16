@@ -68,7 +68,7 @@ class PrematchFetcher:
         Raises:
             SystemExit: When no API-Football key is set up.
         """
-        self._api_key = self._read_key()
+        self._api_key = self._read_the_api_key()
         fixtures = self._ask_api_football(
             PrematchSource.FIXTURE_PATH,
             {
@@ -93,7 +93,7 @@ class PrematchFetcher:
         )
         return len(snapshots)
 
-    def _read_key(self) -> str:
+    def _read_the_api_key(self) -> str:
         """Read the key that every request to this endpoint needs.
 
         Raises:
@@ -189,12 +189,14 @@ class PrematchFetcher:
     ) -> dict[str, Any] | None:
         """Read the weather at kick off, or return None when the venue is unknown."""
         place_name = venue.get("city") or venue.get("name") or ""
-        point = self._geocode(place_name)
+        point = self._turn_a_venue_name_into_coordinates(place_name)
         if point is None:
             return None
         return self._read_forecast(point[0], point[1], kick_off)
 
-    def _geocode(self, place_name: str) -> tuple[float, float] | None:
+    def _turn_a_venue_name_into_coordinates(
+        self, place_name: str
+    ) -> tuple[float, float] | None:
         """Turn a venue name into coordinates."""
         if not place_name:
             return None

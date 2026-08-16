@@ -114,7 +114,7 @@ class CountryClimateBuilder:
         """Look the country up, under the name the geocoder knows it by."""
         query = CountryClimateCalculation.PLACE_OF_TEAM_NAME.get(country, country)
         answer = self._web_file_downloader.download_json(
-            f"{OpenMeteoSource.GEOCODING_URL}?name={self._quoted(query)}&count=1",
+            f"{OpenMeteoSource.GEOCODING_URL}?name={self._made_safe_for_a_query_string(query)}&count=1",
             timeout_in_seconds=OpenMeteoSource.TIMEOUT_IN_SECONDS,
         )
         results = (answer or {}).get("results") or []
@@ -188,11 +188,11 @@ class CountryClimateBuilder:
                     "city": weather["city"],
                     "apparent_temperature_c": felt_like,
                     "home_team": home_team,
-                    "home_climate_delta_c": self._distance_of(
+                    "home_climate_delta_c": self._how_much_warmer_than_at_home(
                         felt_like, home_team, temperature_of_country
                     ),
                     "away_team": away_team,
-                    "away_climate_delta_c": self._distance_of(
+                    "away_climate_delta_c": self._how_much_warmer_than_at_home(
                         felt_like, away_team, temperature_of_country
                     ),
                 }
@@ -206,7 +206,7 @@ class CountryClimateBuilder:
             for row in self._read_every_tournament_match()
         }
 
-    def _distance_of(
+    def _how_much_warmer_than_at_home(
         self,
         felt_like: str,
         team: str,
@@ -225,7 +225,7 @@ class CountryClimateBuilder:
             CountryClimateCalculation.DELTA_DECIMAL_PLACES,
         )
 
-    def _quoted(self, text: str) -> str:
+    def _made_safe_for_a_query_string(self, text: str) -> str:
         """Make a name safe to put into a query string."""
         return urllib.parse.quote(text)
 

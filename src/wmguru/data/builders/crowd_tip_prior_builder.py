@@ -119,7 +119,7 @@ class CrowdTipPriorBuilder:
         away_goals = matches["away_goals"].clip(upper=highest).astype(int)
 
         return matches.assign(
-            favorite_band=self._band_of(
+            favorite_band=self._which_band_the_favourite_falls_into(
                 np.maximum(home_win_chance, 1.0 - home_win_chance)
             ),
             favorite_goals=np.where(home_is_the_favourite, home_goals, away_goals),
@@ -148,7 +148,9 @@ class CrowdTipPriorBuilder:
             ** (-rating_gap / CrowdTipPriorCalculation.RATING_SCALE)
         )
 
-    def _band_of(self, favourite_chance: pd.Series) -> pd.Series:
+    def _which_band_the_favourite_falls_into(
+        self, favourite_chance: pd.Series
+    ) -> pd.Series:
         """Say which band a favourite of this strength falls into."""
         edges = CrowdTipPriorCalculation.BAND_EDGES
         names = [

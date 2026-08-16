@@ -46,7 +46,7 @@ class PredictionMarketFetcher:
         rows: list[list[str]] = []
         seen_events: set[str] = set()
         for search_term in PredictionMarketSource.SEARCH_TERMS:
-            answer = self._search(
+            answer = self._send_one_search_request(
                 PredictionMarketSource.POLYMARKET_SEARCH_URL, search_term
             )
             if not isinstance(answer, dict):
@@ -96,7 +96,7 @@ class PredictionMarketFetcher:
         rows: list[list[str]] = []
         seen_markets: set[str] = set()
         for search_term in PredictionMarketSource.SEARCH_TERMS:
-            answer = self._search(
+            answer = self._send_one_search_request(
                 PredictionMarketSource.MANIFOLD_SEARCH_URL,
                 search_term,
                 PredictionMarketSource.MANIFOLD_LIMIT_PARAMETER,
@@ -127,7 +127,9 @@ class PredictionMarketFetcher:
                 )
         return rows
 
-    def _search(self, base_url: str, search_term: str, suffix: str = "") -> Any:
+    def _send_one_search_request(
+        self, base_url: str, search_term: str, suffix: str = ""
+    ) -> Any:
         """Send one search request against one of the two markets."""
         return self._web_file_downloader.download_json(
             base_url + urllib.parse.quote(search_term) + suffix,

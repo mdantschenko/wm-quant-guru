@@ -54,7 +54,7 @@ class StatsBombExpectedGoalsDownloader:
             target_file, StatsBombSource.EXPECTED_GOALS_COLUMN_NAMES
         ).writing_writer() as writer:
             for match in matches:
-                row = self._build_row(match)
+                row = self._build_the_row_of_one_match(match)
                 if row is None:
                     continue
                 writer.writerow(row)
@@ -63,7 +63,7 @@ class StatsBombExpectedGoalsDownloader:
         print(f"  OK    {tournament_name}: {written_count} matches -> {target_file}")
         return written_count
 
-    def _build_row(self, match: dict[str, Any]) -> list[Any] | None:
+    def _build_the_row_of_one_match(self, match: dict[str, Any]) -> list[Any] | None:
         """Build one output row."""
         home_team_name = match["home_team"]["home_team_name"]
         away_team_name = match["away_team"]["away_team_name"]

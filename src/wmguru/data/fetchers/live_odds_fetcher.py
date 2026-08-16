@@ -58,7 +58,9 @@ class LiveOddsFetcher:
         Raises:
             SystemExit: When no API key is set up.
         """
-        answer = self._ask(f"sports?all=true&apiKey={self._read_key()}")
+        answer = self._send_one_request(
+            f"sports?all=true&apiKey={self._read_the_api_key()}"
+        )
         competitions = answer if isinstance(answer, list) else []
         shown_count = 0
         for competition in competitions:
@@ -86,10 +88,10 @@ class LiveOddsFetcher:
                 not answer with a match list.
         """
         stamp = fetched_at.strftime(TimeStampFormat.UTC_TIME_STAMP)
-        events = self._ask(
+        events = self._send_one_request(
             f"sports/{LiveOddsSource.SPORT_KEY}/odds"
             f"?regions={LiveOddsSource.REGIONS}&markets={LiveOddsSource.MARKETS}"
-            f"&oddsFormat={LiveOddsSource.ODDS_FORMAT}&apiKey={self._read_key()}"
+            f"&oddsFormat={LiveOddsSource.ODDS_FORMAT}&apiKey={self._read_the_api_key()}"
         )
         if not isinstance(events, list):
             raise SystemExit("The odds endpoint did not answer with a match list.")
@@ -105,7 +107,7 @@ class LiveOddsFetcher:
         self._report_quota()
         return len(rows)
 
-    def _read_key(self) -> str:
+    def _read_the_api_key(self) -> str:
         """Read the key that every request to this endpoint needs.
 
         Raises:
@@ -121,7 +123,7 @@ class LiveOddsFetcher:
             )
         return key
 
-    def _ask(self, path_with_parameters: str) -> Any:
+    def _send_one_request(self, path_with_parameters: str) -> Any:
         """Send one request against the endpoint."""
         return self._web_file_downloader.download_json(
             f"{LiveOddsSource.BASE_URL}/{path_with_parameters}",

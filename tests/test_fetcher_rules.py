@@ -74,7 +74,7 @@ def test_an_unknown_stadium_is_reported_as_not_found():
 def test_one_rating_snapshot_per_year_plus_today():
     fetcher = ClubEloFetcher(None)
 
-    days = fetcher._snapshot_days(date(2003, 3, 15))
+    days = fetcher._list_the_snapshot_days(date(2003, 3, 15))
 
     assert days == [
         "2000-06-01",
@@ -89,7 +89,7 @@ def test_today_is_not_asked_for_twice():
     """On the first of June today already is one of the yearly snapshots."""
     fetcher = ClubEloFetcher(None)
 
-    days = fetcher._snapshot_days(date(2001, 6, 1))
+    days = fetcher._list_the_snapshot_days(date(2001, 6, 1))
 
     assert days == ["2000-06-01", "2001-06-01"]
 

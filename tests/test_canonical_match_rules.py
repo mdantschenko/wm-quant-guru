@@ -202,7 +202,9 @@ def test_every_kind_of_competition_gets_a_category():
         ]
     )
 
-    categories = list(CanonicalMatchBuilder().category_of(names))
+    categories = list(
+        CanonicalMatchBuilder().which_kind_of_competition_each_name_is(names)
+    )
 
     assert categories == [
         CanonicalMatchDataset.FRIENDLY_CATEGORY,
@@ -215,7 +217,7 @@ def test_every_kind_of_competition_gets_a_category():
 
 def test_a_qualification_is_never_counted_as_the_tournament_itself():
     """Both names hold the tournament, and the order of the tests decides."""
-    categories = CanonicalMatchBuilder().category_of(
+    categories = CanonicalMatchBuilder().which_kind_of_competition_each_name_is(
         pd.Series(["AFC Asian Cup qualification"])
     )
 

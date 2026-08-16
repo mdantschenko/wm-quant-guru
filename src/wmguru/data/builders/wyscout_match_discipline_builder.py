@@ -109,7 +109,9 @@ class WyscoutMatchDisciplineBuilder:
                 event.get(WyscoutEventFile.TEAM_IDENTIFIER_COLUMN, "")
             ),
         )
-        counter = counts.setdefault(key, self._discipline_counter.empty_counter())
+        counter = counts.setdefault(
+            key, self._discipline_counter.start_a_counter_at_zero()
+        )
         counter[EventSourceSetting.FOUL_NAME] += 1 if is_foul else 0
         for card_name in card_names:
             counter[card_name] += 1
@@ -133,7 +135,7 @@ class WyscoutMatchDisciplineBuilder:
                     "team": lookups.team_names.get(team, team),
                     "opponent": lookups.team_names.get(opponent, opponent),
                     "player": lookups.player_names.get(player, player),
-                    **self._match_columns_of(facts, lookups),
+                    **self._the_columns_both_files_share(facts, lookups),
                     **counter,
                 }
             )
@@ -151,11 +153,11 @@ class WyscoutMatchDisciplineBuilder:
         for game, facts in match_facts.items():
             home_counter = counts_of_team.get(
                 (game, facts.home_team_identifier),
-                self._discipline_counter.empty_counter(),
+                self._discipline_counter.start_a_counter_at_zero(),
             )
             away_counter = counts_of_team.get(
                 (game, facts.away_team_identifier),
-                self._discipline_counter.empty_counter(),
+                self._discipline_counter.start_a_counter_at_zero(),
             )
             rows.append(
                 {
@@ -166,7 +168,7 @@ class WyscoutMatchDisciplineBuilder:
                     "away": lookups.team_names.get(
                         facts.away_team_identifier, facts.away_team_identifier
                     ),
-                    **self._match_columns_of(facts, lookups),
+                    **self._the_columns_both_files_share(facts, lookups),
                     **self._discipline_counter.summarise_both_sides(
                         home_counter, away_counter
                     ),
@@ -181,13 +183,13 @@ class WyscoutMatchDisciplineBuilder:
         counts_of_team: dict[tuple[str, str], dict[str, int]] = {}
         for (game, _player, team), counter in counts.items():
             target = counts_of_team.setdefault(
-                (game, team), self._discipline_counter.empty_counter()
+                (game, team), self._discipline_counter.start_a_counter_at_zero()
             )
             for name, value in counter.items():
                 target[name] += value
         return counts_of_team
 
-    def _match_columns_of(
+    def _the_columns_both_files_share(
         self, facts: WyscoutMatchFacts, lookups: WyscoutNameLookups
     ) -> dict[str, Any]:
         """Build the columns both output files have in common."""

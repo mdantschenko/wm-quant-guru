@@ -47,7 +47,7 @@ class CanonicalMatchBuilder:
             ~was_played, list(CanonicalMatchDataset.FIXTURE_COLUMN_NAMES)
         ]
 
-        self._write(rows, fixtures, problems)
+        self._write_the_three_files(rows, fixtures, problems)
         named_stages = int(
             (matches["tournament_stage"] != CanonicalMatchDataset.UNKNOWN_STAGE).sum()
         )
@@ -244,7 +244,7 @@ class CanonicalMatchBuilder:
             tournament_stage=matches["tournament_stage"].fillna(
                 CanonicalMatchDataset.UNKNOWN_STAGE
             ),
-            competition_category=self.category_of(
+            competition_category=self.which_kind_of_competition_each_name_is(
                 matches[InternationalResultSource.TOURNAMENT_COLUMN]
             ),
             city=matches[InternationalResultSource.CITY_COLUMN],
@@ -254,7 +254,9 @@ class CanonicalMatchBuilder:
             away_shootout_goals=None,
         )
 
-    def category_of(self, tournament_names: pd.Series) -> pd.Series:
+    def which_kind_of_competition_each_name_is(
+        self, tournament_names: pd.Series
+    ) -> pd.Series:
         """Say which kind of competition every tournament name stands for.
 
         Args:
@@ -315,16 +317,16 @@ class CanonicalMatchBuilder:
                     for problem in problem_list
                 )
                 continue
-            rows.append(self._as_written_row(record))
+            rows.append(self._turned_back_into_a_written_row(record))
         return rows, problems
 
-    def _as_written_row(self, record: MatchRecord) -> dict[str, Any]:
+    def _turned_back_into_a_written_row(self, record: MatchRecord) -> dict[str, Any]:
         """Turn one checked record back into the row that is written."""
         written = record.model_dump()
         written["match_date"] = record.match_date.isoformat()
         return written
 
-    def _write(
+    def _write_the_three_files(
         self,
         rows: list[dict[str, Any]],
         fixtures: pd.DataFrame,

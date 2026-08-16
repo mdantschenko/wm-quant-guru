@@ -53,7 +53,7 @@ class WyscoutPlayerMetricBuilder:
         """
         roles = self._wyscout_data_reader.read_player_roles()
         counters = self._count_over_every_match(roles)
-        rows = self._build_rows(counters, roles)
+        rows = self._build_the_rows_of_every_appearance(counters, roles)
         total_count = self._output_file.write_keeping_the_other_source(rows)
         print(f"  OK    {len(rows)} player rows from Wyscout, {total_count} in all")
         return total_count
@@ -73,7 +73,7 @@ class WyscoutPlayerMetricBuilder:
                     continue
                 counter = counters.setdefault(
                     (action.player_identifier, game_identifier),
-                    self._player_metric_calculator.empty_counter(),
+                    self._player_metric_calculator.start_a_counter_at_zero(),
                 )
                 self._player_metric_calculator.add_one_action(
                     counter,
@@ -83,7 +83,7 @@ class WyscoutPlayerMetricBuilder:
                 )
         return counters
 
-    def _build_rows(
+    def _build_the_rows_of_every_appearance(
         self,
         counters: dict[tuple[str, str], dict[str, float]],
         roles: dict[str, str],
@@ -100,10 +100,10 @@ class WyscoutPlayerMetricBuilder:
                 continue
             counter = counters.get(
                 (player_identifier, game_identifier),
-                self._player_metric_calculator.empty_counter(),
+                self._player_metric_calculator.start_a_counter_at_zero(),
             )
             rows.append(
-                self._build_one_row(
+                self._build_the_row_of_one_player(
                     appearance,
                     facts,
                     lookups,
@@ -113,7 +113,7 @@ class WyscoutPlayerMetricBuilder:
             )
         return rows
 
-    def _build_one_row(
+    def _build_the_row_of_one_player(
         self,
         appearance: PlayerAppearance,
         facts: WyscoutMatchFacts,
@@ -139,7 +139,7 @@ class WyscoutPlayerMetricBuilder:
             "player": appearance.player_name,
             "role": role,
             "minutes": appearance.minutes_played,
-            **self._player_metric_calculator.build_row(
+            **self._player_metric_calculator.build_the_columns_of_one_player(
                 counter, role == PlayerMatchMetricFeature.GOALKEEPER_ROLE
             ),
         }

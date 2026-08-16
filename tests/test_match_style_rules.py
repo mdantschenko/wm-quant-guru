@@ -6,16 +6,21 @@ share per score line, which has to know what the score was at the moment of
 each pass rather than at the end.
 """
 
-from wmguru.helpers.data_class import MatchAction, MatchIdentity
+import pandas as pd
+
 from wmguru.helpers.utils import MatchStyleCalculator
 
-IDENTITY = MatchIdentity(
-    game_identifier="1",
-    competition_name="Serie A",
-    season_name="2018",
-    match_date="2018-05-13",
-    home_team_name="Juventus",
-    away_team_name="Napoli",
+IDENTITIES = pd.DataFrame(
+    [
+        {
+            "game_identifier": "1",
+            "competition_name": "Serie A",
+            "season_name": "2018",
+            "match_date": "2018-05-13",
+            "home_team_name": "Juventus",
+            "away_team_name": "Napoli",
+        }
+    ]
 )
 
 
@@ -31,32 +36,33 @@ def make_action(
     expected_goals: float | None = None,
     was_after_a_set_piece: bool = False,
     second_in_period: float = 0.0,
-) -> MatchAction:
-    """Build one action, with everything not named left harmless."""
-    return MatchAction(
-        team_name=team_name,
-        kind=kind,
-        was_successful=was_successful,
-        start_x_in_metres=start_x,
-        start_y_in_metres=start_y,
-        end_x_in_metres=end_x,
-        end_y_in_metres=end_y,
-        scoring_team=scoring_team,
-        expected_goals=expected_goals,
-        was_after_a_set_piece=was_after_a_set_piece,
-        period_number=1,
-        second_in_period=second_in_period,
-    )
+) -> dict:
+    """Build one action row, with everything not named left harmless."""
+    return {
+        "game_identifier": "1",
+        "team_name": team_name,
+        "kind": kind,
+        "was_successful": was_successful,
+        "start_x_in_metres": start_x,
+        "start_y_in_metres": start_y,
+        "end_x_in_metres": end_x,
+        "end_y_in_metres": end_y,
+        "scoring_team": scoring_team,
+        "expected_goals": expected_goals,
+        "was_after_a_set_piece": was_after_a_set_piece,
+        "period_number": 1,
+        "second_in_period": second_in_period,
+    }
 
 
 def calculate_rows(
-    actions: list[MatchAction], has_expected_goals: bool = False
+    actions: list[dict], has_expected_goals: bool = False, source_name: str = "wyscout"
 ) -> dict[str, dict]:
     """Run one match through the calculator and key the rows by team."""
-    rows = MatchStyleCalculator().calculate_rows_of_one_match(
-        actions, IDENTITY, "wyscout", has_expected_goals
+    rows = MatchStyleCalculator().summarise_every_match(
+        pd.DataFrame(actions), IDENTITIES, source_name, has_expected_goals
     )
-    return {row["team"]: row for row in rows}
+    return {row["team"]: row for _, row in rows.iterrows()}
 
 
 def test_the_pass_share_of_both_teams_adds_up_to_one():
@@ -193,24 +199,20 @@ def test_a_penalty_is_in_the_expected_goals_but_not_in_the_non_penalty_ones():
 
 
 def test_what_one_team_created_is_what_the_other_one_conceded():
-    calculator = MatchStyleCalculator()
-    rows = calculator.calculate_rows_of_one_match(
+    rows = calculate_rows(
         [
             make_action("Juventus", "open_pass"),
             make_action("Juventus", "shot", start_x=95.0, expected_goals=0.4),
             make_action("Napoli", "open_pass"),
             make_action("Napoli", "shot", start_x=95.0, expected_goals=0.1),
         ],
-        IDENTITY,
-        "statsbomb",
         has_expected_goals=True,
+        source_name="statsbomb",
     )
-    calculator.fill_expected_goals_against(rows)
-    by_team = {row["team"]: row for row in rows}
 
-    assert by_team["Juventus"]["expected_goals"] == 0.4
-    assert by_team["Juventus"]["expected_goals_against"] == 0.1
-    assert by_team["Napoli"]["expected_goals_against"] == 0.4
+    assert rows["Juventus"]["expected_goals"] == 0.4
+    assert rows["Juventus"]["expected_goals_against"] == 0.1
+    assert rows["Napoli"]["expected_goals_against"] == 0.4
 
 
 def test_a_take_on_that_was_lost_lowers_the_success_rate():

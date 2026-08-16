@@ -40,7 +40,7 @@ class WyscoutPlayerCardBuilder:
             half wrote included.
         """
         cards = self._count_cards()
-        rows = self._build_rows(cards)
+        rows = self._build_the_rows_of_every_player(cards)
         total_count = self._output_file.write_keeping_the_other_source(rows)
         print(f"  OK    {len(rows)} carded players from Wyscout, {total_count} in all")
         return total_count
@@ -80,15 +80,15 @@ class WyscoutPlayerCardBuilder:
                 event[WyscoutEventFile.TEAM_IDENTIFIER_COLUMN]
             ),
         )
-        counter = cards.setdefault(key, self._empty_counter())
+        counter = cards.setdefault(key, self._start_a_counter_at_zero())
         for card_name in card_names:
             counter[card_name] += 1
 
-    def _empty_counter(self) -> dict[str, int]:
+    def _start_a_counter_at_zero(self) -> dict[str, int]:
         """Build a counter that holds a zero for every kind of card."""
         return {name: 0 for name in WyscoutEventFile.CARD_OF_TAG.values()}
 
-    def _build_rows(
+    def _build_the_rows_of_every_player(
         self, cards: dict[tuple[str, str, str], dict[str, int]]
     ) -> list[dict[str, Any]]:
         """Turn the counters into output rows, naming teams and players."""

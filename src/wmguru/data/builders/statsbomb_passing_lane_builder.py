@@ -81,9 +81,9 @@ class StatsBombPassingLaneBuilder:
             for event in self._statsbomb_reader.read_events(match):
                 self._add_one_event(lanes, event)
             rows.extend(
-                self._passing_lane_counter.build_rows(
+                self._passing_lane_counter.build_the_rows_of_every_lane(
                     lanes,
-                    self._identity_of(match, competition),
+                    self._which_match_this_row_belongs_to(match, competition),
                     EventSourceSetting.STATSBOMB_NAME,
                 )
             )
@@ -131,11 +131,11 @@ class StatsBombPassingLaneBuilder:
             team_name,
             passer_name,
             receiver_name,
-            self._length_in_metres(start_location[0]),
-            self._length_in_metres(end_location[0]),
+            self._length_on_our_pitch_in_metres(start_location[0]),
+            self._length_on_our_pitch_in_metres(end_location[0]),
         )
 
-    def _length_in_metres(self, distance_along_the_pitch: float) -> float:
+    def _length_on_our_pitch_in_metres(self, distance_along_the_pitch: float) -> float:
         """Convert a length off the StatsBomb pitch onto the one used everywhere."""
         return (
             distance_along_the_pitch
@@ -143,7 +143,7 @@ class StatsBombPassingLaneBuilder:
             * PitchGeometry.LENGTH_IN_METRES
         )
 
-    def _identity_of(
+    def _which_match_this_row_belongs_to(
         self, match: dict[str, Any], competition: StatsBombCompetition
     ) -> MatchIdentity:
         """Say which match a row belongs to."""
@@ -151,7 +151,7 @@ class StatsBombPassingLaneBuilder:
             game_identifier=str(match[StatsBombOpenDataSource.MATCH_IDENTIFIER_FIELD]),
             competition_name=competition.competition_name,
             season_name=competition.season_name,
-            match_date=self._statsbomb_reader.date_of(match),
+            match_date=self._statsbomb_reader.read_the_day_a_match_was_played(match),
             home_team_name=match[StatsBombOpenDataSource.HOME_TEAM_FIELD][
                 StatsBombOpenDataSource.HOME_TEAM_NAME_FIELD
             ],

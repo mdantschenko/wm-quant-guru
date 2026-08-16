@@ -49,13 +49,15 @@ class RefereeProfileBuilder:
         """Add the matches of every referee up and turn the totals into rates."""
         usable = self._only_the_usable_matches(matches)
         counted = usable.assign(
-            yellow_cards=self._added_up(
+            yellow_cards=self._sum_of_the_named_columns(
                 usable, RefereeProfileCalculation.YELLOW_CARD_COLUMNS
             ),
-            red_cards=self._added_up(
+            red_cards=self._sum_of_the_named_columns(
                 usable, RefereeProfileCalculation.RED_CARD_COLUMNS
             ),
-            fouls=self._added_up(usable, RefereeProfileCalculation.FOUL_COLUMNS),
+            fouls=self._sum_of_the_named_columns(
+                usable, RefereeProfileCalculation.FOUL_COLUMNS
+            ),
         )
         referee_column = RefereeProfileCalculation.REFEREE_COLUMN
         grouped = counted.groupby(referee_column, dropna=False, sort=False)
@@ -107,7 +109,7 @@ class RefereeProfileBuilder:
             **{RefereeProfileCalculation.REFEREE_COLUMN: referee_names}
         )
 
-    def _added_up(
+    def _sum_of_the_named_columns(
         self, matches: pd.DataFrame, column_names: tuple[str, ...]
     ) -> pd.Series:
         """Add the named columns of every match up, reading anything odd as zero.

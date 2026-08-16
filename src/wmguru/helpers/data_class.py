@@ -178,7 +178,7 @@ class TeamPass:
         return self.end_x_in_metres - self.start_x_in_metres
 
     @property
-    def reached_somebody_else(self) -> bool:
+    def has_reached_somebody_else(self) -> bool:
         """True when the pass arrived at a team mate, so it forms a lane."""
         return (
             self.was_successful

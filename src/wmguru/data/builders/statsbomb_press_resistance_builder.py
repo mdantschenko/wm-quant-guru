@@ -82,7 +82,7 @@ class StatsBombPressResistanceBuilder:
             if not player_name:
                 continue
             self._add_one_event(
-                counters.setdefault(player_name, self._empty_counter()), event
+                counters.setdefault(player_name, self._start_a_counter_at_zero()), event
             )
             team_of_player[player_name] = event.get(
                 StatsBombOpenDataSource.TEAM_FIELD, {}
@@ -95,19 +95,19 @@ class StatsBombPressResistanceBuilder:
             StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
         ]
         return [
-            self._build_one_row(
+            self._build_the_row_of_one_player(
                 player_name,
                 counter,
                 team_of_player.get(player_name, ""),
                 home_team,
                 away_team,
-                self._statsbomb_reader.date_of(match),
+                self._statsbomb_reader.read_the_day_a_match_was_played(match),
                 competition,
             )
             for player_name, counter in counters.items()
         ]
 
-    def _empty_counter(self) -> dict[str, float]:
+    def _start_a_counter_at_zero(self) -> dict[str, float]:
         """Build a counter that holds a zero for everything that is counted."""
         return {
             name: 0.0
@@ -140,7 +140,9 @@ class StatsBombPressResistanceBuilder:
             counter["pressured_carries"] += 1 if was_under_pressure else 0
         elif event_name == MatchStyleFeature.DRIBBLE_EVENT_NAME:
             counter["take_ons"] += 1
-            counter["take_ons_won"] += 1 if self._was_won(event) else 0
+            counter["take_ons_won"] += (
+                1 if self._has_got_past_the_opponent(event) else 0
+            )
         elif event_name == PressResistanceFeature.DISPOSSESSED_EVENT_NAME:
             counter["times_dispossessed"] += 1
         elif event_name == PressResistanceFeature.MISCONTROL_EVENT_NAME:
@@ -163,7 +165,7 @@ class StatsBombPressResistanceBuilder:
         counter["pressured_passes"] += 1
         counter["completed_pressured_passes"] += 1 if was_completed else 0
 
-    def _was_won(self, event: dict[str, Any]) -> bool:
+    def _has_got_past_the_opponent(self, event: dict[str, Any]) -> bool:
         """Return True when the player got past their opponent."""
         outcome = event.get(StatsBombOpenDataSource.DRIBBLE_FIELD, {}).get(
             StatsBombOpenDataSource.OUTCOME_FIELD, {}
@@ -173,7 +175,7 @@ class StatsBombPressResistanceBuilder:
             == MatchStyleFeature.COMPLETED_DRIBBLE_NAME
         )
 
-    def _build_one_row(
+    def _build_the_row_of_one_player(
         self,
         player_name: str,
         counter: dict[str, float],
@@ -193,15 +195,15 @@ class StatsBombPressResistanceBuilder:
             "opponent": away_team if team_name == home_team else home_team,
             "player": player_name,
             **{name: int(value) for name, value in counter.items()},
-            "pressured_pass_completion": self._share(
+            "pressured_pass_completion": self._divided_or_left_empty(
                 counter["completed_pressured_passes"], counter["pressured_passes"]
             ),
-            "pressured_share": self._share(
+            "pressured_share": self._divided_or_left_empty(
                 counter["pressured_passes"], counter["passes"]
             ),
         }
 
-    def _share(self, part: float, whole: float) -> Any:
+    def _divided_or_left_empty(self, part: float, whole: float) -> Any:
         """Divide, or give an empty cell when there is nothing to divide by.
 
         Returns:

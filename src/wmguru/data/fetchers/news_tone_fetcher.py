@@ -62,8 +62,12 @@ class NewsToneFetcher:
     def _write_one_team(self, writer: Any, team_name: str) -> int:
         """Write both series of one team, joined by day."""
         query = NewsToneSource.QUERY_TEMPLATE.format(team_name=team_name)
-        volume_series = self._read_series(query, NewsToneSource.VOLUME_MODE)
-        tone_series = self._read_series(query, NewsToneSource.TONE_MODE)
+        volume_series = self._read_the_day_and_value_pairs(
+            query, NewsToneSource.VOLUME_MODE
+        )
+        tone_series = self._read_the_day_and_value_pairs(
+            query, NewsToneSource.TONE_MODE
+        )
         written_count = 0
         for day in sorted(set(volume_series) | set(tone_series)):
             writer.writerow(
@@ -82,7 +86,7 @@ class NewsToneFetcher:
         )
         return written_count
 
-    def _read_series(self, query: str, mode: str) -> dict[str, float]:
+    def _read_the_day_and_value_pairs(self, query: str, mode: str) -> dict[str, float]:
         """Read the day and value pairs, or nothing when the query gave nothing back."""
         url = (
             f"{NewsToneSource.API_URL}?query={urllib.parse.quote(query)}"
