@@ -264,13 +264,15 @@ class PreparedStatsBombTables:
 
         Returns:
             The counts with the columns of their match beside them and a
-            team_name, opponent_name and player_name added.
+            team_name, opponent_name and player_name added. The name is the
+            one that match called the player, because the source spells a few
+            of them differently from one season to the next.
         """
         with_the_name = per_player.merge(
-            marked_events[["player_identifier", "player_name"]].drop_duplicates(
-                "player_identifier"
-            ),
-            on="player_identifier",
+            marked_events[
+                ["game_identifier", "player_identifier", "player_name"]
+            ].drop_duplicates(["game_identifier", "player_identifier"]),
+            on=["game_identifier", "player_identifier"],
             how="left",
         )
         of_named_matches = with_the_name.merge(sides, on="game_identifier")
@@ -1055,9 +1057,17 @@ class SharedFeatureFile:
 
         Returns:
             How many rows the file holds afterwards, both sources counted.
+
+        A file the other source never writes into is written as it stands.
+        Stacking an empty table onto it would only hand pandas a column the
+        one side has and the other has not, and a whole column of counts
+        would come back as decimals.
         """
-        both_sources = pd.concat(
-            [own_rows, self.read_the_table_of_the_other_source()], ignore_index=True
+        of_the_other_source = self.read_the_table_of_the_other_source()
+        both_sources = (
+            own_rows
+            if of_the_other_source.empty
+            else pd.concat([own_rows, of_the_other_source], ignore_index=True)
         )
         self._csv_file.write_table(self._sorted_the_way_a_table_is(both_sources))
         return len(both_sources)
