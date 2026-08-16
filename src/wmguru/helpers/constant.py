@@ -25,6 +25,7 @@ class ProjectPath:
     )
     DATA_ROOT: Path = PROJECT_ROOT / "Data"
     CUSTOM_DATA_ROOT: Path = DATA_ROOT / "Custom_Data"
+    CANONICAL_ROOT: Path = DATA_ROOT / "Canonical"
     DOCUMENTATION_ROOT: Path = PROJECT_ROOT / "docs"
 
 
@@ -668,6 +669,111 @@ class InternationalResultSource:
     AWAY_TEAM_COLUMN: str = "away_team"
     NEUTRAL_VENUE_COLUMN: str = "neutral"
     NOT_NEUTRAL_TEXT: str = "FALSE"
+    HOME_SCORE_COLUMN: str = "home_score"
+    AWAY_SCORE_COLUMN: str = "away_score"
+    SHOOTOUT_FILE: Path = RESULT_FILE.parent / "shootouts.csv"
+    SHOOTOUT_WINNER_COLUMN: str = "winner"
+
+
+class CanonicalMatchDataset:
+    """Every international in the one schema the models are trained on.
+
+    The results file is the backbone of the project: every international
+    since 1872, and at the front the fixtures of the next tournament. A
+    fixture carries the text NA where a score belongs, which no reader may
+    mistake for a played match, so the two are written into two files.
+
+    The score of the source is the one the match ended on, extra time
+    included. What the score was after ninety minutes is not in any source,
+    so it is only known for a match that could not have gone to extra time.
+    Every match that went to a shootout says so through its flag.
+
+    Attributes:
+        UNPLAYED_SCORE_TEXT: What the source writes where a fixture has no
+            score yet. It is not an empty cell, so a plain emptiness check
+            reads a fixture as a played match that ended nil nil.
+        STAGE_TOLERANCE_IN_DAYS: The tournament files date a match by its
+            kick off in UTC, the results file by the local day, which pulls a
+            late kick off in the Americas one day apart.
+        MAJOR_TOURNAMENT_NAMES: The competitions a World Cup model can learn
+            from. The other 190 in the file are regional cups and islands
+            games, which say little about a World Cup.
+    """
+
+    OUTPUT_FILE: Path = ProjectPath.CANONICAL_ROOT / "canonical_matches.csv"
+    FIXTURE_OUTPUT_FILE: Path = ProjectPath.CANONICAL_ROOT / "canonical_fixtures.csv"
+    PROBLEM_OUTPUT_FILE: Path = ProjectPath.CANONICAL_ROOT / "canonical_problems.csv"
+
+    COLUMN_NAMES: tuple[str, ...] = (
+        "match_id",
+        "match_date",
+        "home_team_name",
+        "home_team_is_host",
+        "away_team_name",
+        "away_team_is_host",
+        "home_goals_regular_time",
+        "away_goals_regular_time",
+        "home_goals_final",
+        "away_goals_final",
+        "is_regular_time_score_reconstructed_unreliable",
+        "is_neutral_venue",
+        "tournament_name",
+        "tournament_stage",
+        "competition_category",
+        "city",
+        "country",
+        "home_shootout_goals",
+        "away_shootout_goals",
+        "shootout_winner",
+    )
+    FIXTURE_COLUMN_NAMES: tuple[str, ...] = (
+        "match_id",
+        "match_date",
+        "home_team_name",
+        "home_team_is_host",
+        "away_team_name",
+        "away_team_is_host",
+        "is_neutral_venue",
+        "tournament_name",
+        "tournament_stage",
+        "competition_category",
+        "city",
+        "country",
+    )
+    PROBLEM_COLUMN_NAMES: tuple[str, ...] = ("match_id", "problem")
+
+    UNPLAYED_SCORE_TEXT: str = "NA"
+    MATCH_IDENTIFIER_SEPARATOR: str = "|"
+    REPEATED_IDENTIFIER_SEPARATOR: str = "#"
+
+    STAGE_SOURCE_FOLDER: Path = StatsBombSource.OUTPUT_FOLDER
+    STAGE_SOURCE_PATTERN: str = "*.csv"
+    STAGE_COLUMN: str = "stage"
+    STAGE_DATE_COLUMN: str = "match_date"
+    STAGE_TOLERANCE_IN_DAYS: int = 1
+    UNKNOWN_STAGE: str = "unknown"
+
+    FRIENDLY_CATEGORY: str = "friendly"
+    QUALIFICATION_CATEGORY: str = "qualification"
+    MAJOR_TOURNAMENT_CATEGORY: str = "major_tournament"
+    NATIONS_LEAGUE_CATEGORY: str = "nations_league"
+    OTHER_TOURNAMENT_CATEGORY: str = "other_tournament"
+
+    FRIENDLY_TOURNAMENT_NAME: str = "Friendly"
+    QUALIFICATION_MARKER: str = "qualification"
+    NATIONS_LEAGUE_MARKER: str = "Nations League"
+    MAJOR_TOURNAMENT_NAMES: frozenset[str] = frozenset(
+        {
+            "FIFA World Cup",
+            "UEFA Euro",
+            "Copa América",
+            "African Cup of Nations",
+            "AFC Asian Cup",
+            "Gold Cup",
+            "Oceania Nations Cup",
+            "Confederations Cup",
+        }
+    )
 
 
 class GeographySetting:
