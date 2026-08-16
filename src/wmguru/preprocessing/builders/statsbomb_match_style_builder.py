@@ -1,40 +1,31 @@
 """The style row of every team and match, out of the StatsBomb data.
 
-The reader turns the events into the same actions the Wyscout half produces
-and the calculator does the rest. StatsBomb carries expected goals, which is
-the one thing Wyscout cannot give.
-
-The file is written after every competition, so a stopped run picks up where it
-left off.
+The prepared actions are the same fifteen columns the Wyscout half has, so the
+calculator does the rest. StatsBomb carries expected goals, which is the one
+thing Wyscout cannot give.
 """
-
-import pandas as pd
 
 from wmguru.helpers.constant import (
     EventSourceSetting,
     MatchStyleFeature,
-    StatsBombOpenDataSource,
-    WebRequestSetting,
 )
-from wmguru.helpers.data_class import StatsBombCompetition
 from wmguru.helpers.utils import (
     CsvFile,
     MatchStyleCalculator,
+    PreparedStatsBombTables,
     SharedFeatureFile,
-    StatsBombOpenDataReader,
-    WebFileDownloader,
 )
 
 
 class StatsBombMatchStyleBuilder:
-    """The StatsBomb events of every free men's competition, as style rows."""
+    """The StatsBomb actions of every free men's competition, as style rows."""
 
     def __init__(
         self,
-        statsbomb_reader: StatsBombOpenDataReader,
+        prepared_tables: PreparedStatsBombTables,
         match_style_calculator: MatchStyleCalculator,
     ) -> None:
-        self._statsbomb_reader = statsbomb_reader
+        self._prepared_tables = prepared_tables
         self._match_style_calculator = match_style_calculator
         self._output_file = SharedFeatureFile(
             CsvFile(MatchStyleFeature.OUTPUT_FILE, MatchStyleFeature.COLUMN_NAMES),
@@ -42,83 +33,28 @@ class StatsBombMatchStyleBuilder:
             MatchStyleFeature.SORT_KEY_NAMES,
         )
 
-    def build_every_competition(self) -> int:
-        """Walk every open competition and write the file after each one.
+    def build_every_match(self) -> int:
+        """Group the prepared actions and write one row per team and match.
 
         Returns:
             How many rows the file holds afterwards, the rows the Wyscout half
             wrote included.
 
         Raises:
-            SystemExit: When the competition list could not be loaded.
+            SystemExit: When the actions have not been prepared yet.
         """
-        own_rows = self._output_file.read_own_table()
-        open_competitions = self._statsbomb_reader.read_open_competitions(
-            self._output_file.read_finished_keys()
-        )
-        print(f"Open competitions {len(open_competitions)}", flush=True)
-
-        total_count = len(own_rows) + len(
-            self._output_file.read_the_table_of_the_other_source()
-        )
-        for competition in open_competitions:
-            own_rows = pd.concat(
-                [own_rows, self._build_rows_of_one_competition(competition)],
-                ignore_index=True,
-            )
-            total_count = self._output_file.write_the_table_keeping_the_other_source(
-                own_rows
-            )
-            print(
-                f"  SAVED  {competition.competition_name} "
-                f"{competition.season_name} (file now {total_count})",
-                flush=True,
-            )
-        print(f"\nDone: the style file holds {total_count} rows.")
-        return total_count
-
-    def _build_rows_of_one_competition(
-        self, competition: StatsBombCompetition
-    ) -> pd.DataFrame:
-        """Build the style rows of every match of one season.
-
-        The loop is over the match documents the endpoint hands over one at a
-        time, not over the actions inside them: those are collected into one
-        table and the calculator groups over all of them at once.
-        """
-        matches = self._statsbomb_reader.read_matches(competition)
-        actions = pd.concat(
-            [
-                self._statsbomb_reader.read_the_actions_of_one_match(match)
-                for match in matches
-            ],
-            ignore_index=True,
-        )
-        identities = pd.DataFrame(
-            [
-                self._statsbomb_reader.read_the_identity_of_one_match(
-                    match, competition
-                )
-                for match in matches
-            ]
-        )
-        return self._match_style_calculator.summarise_every_match(
-            actions,
-            identities,
+        rows = self._match_style_calculator.summarise_every_match(
+            self._prepared_tables.read_the_actions(),
+            self._prepared_tables.read_the_match_identities(),
             EventSourceSetting.STATSBOMB_NAME,
             has_expected_goals=True,
         )
+        total_count = self._output_file.write_the_table_keeping_the_other_source(rows)
+        print(f"  OK    {len(rows)} team rows from StatsBomb, {total_count} in all")
+        return total_count
 
 
 if __name__ == "__main__":
     StatsBombMatchStyleBuilder(
-        StatsBombOpenDataReader(
-            WebFileDownloader(
-                user_agent=WebRequestSetting.RESEARCH_USER_AGENT,
-                polite_delay_in_seconds=(
-                    StatsBombOpenDataSource.POLITE_DELAY_IN_SECONDS
-                ),
-            )
-        ),
-        MatchStyleCalculator(),
-    ).build_every_competition()
+        PreparedStatsBombTables(), MatchStyleCalculator()
+    ).build_every_match()

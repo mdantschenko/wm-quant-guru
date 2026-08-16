@@ -8,12 +8,11 @@ expected goals, so those columns stay empty here.
 from wmguru.helpers.constant import (
     EventSourceSetting,
     MatchStyleFeature,
-    PreparedTablePath,
 )
 from wmguru.helpers.utils import (
     CsvFile,
     MatchStyleCalculator,
-    PreparedTableFile,
+    PreparedWyscoutTables,
     SharedFeatureFile,
 )
 
@@ -21,7 +20,12 @@ from wmguru.helpers.utils import (
 class WyscoutMatchStyleBuilder:
     """The Wyscout actions of every match, as two style rows."""
 
-    def __init__(self, match_style_calculator: MatchStyleCalculator) -> None:
+    def __init__(
+        self,
+        prepared_tables: PreparedWyscoutTables,
+        match_style_calculator: MatchStyleCalculator,
+    ) -> None:
+        self._prepared_tables = prepared_tables
         self._match_style_calculator = match_style_calculator
         self._output_file = SharedFeatureFile(
             CsvFile(MatchStyleFeature.OUTPUT_FILE, MatchStyleFeature.COLUMN_NAMES),
@@ -39,14 +43,9 @@ class WyscoutMatchStyleBuilder:
         Raises:
             SystemExit: When the actions have not been prepared yet.
         """
-        actions = PreparedTableFile(PreparedTablePath.WYSCOUT_ACTION_FILE).read()
-        identities = PreparedTableFile(
-            PreparedTablePath.WYSCOUT_MATCH_IDENTITY_FILE
-        ).read()
-
         rows = self._match_style_calculator.summarise_every_match(
-            actions,
-            identities,
+            self._prepared_tables.read_the_actions(),
+            self._prepared_tables.read_the_match_identities(),
             EventSourceSetting.WYSCOUT_NAME,
             has_expected_goals=False,
         )
@@ -56,4 +55,6 @@ class WyscoutMatchStyleBuilder:
 
 
 if __name__ == "__main__":
-    WyscoutMatchStyleBuilder(MatchStyleCalculator()).build_every_match()
+    WyscoutMatchStyleBuilder(
+        PreparedWyscoutTables(), MatchStyleCalculator()
+    ).build_every_match()

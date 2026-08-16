@@ -855,26 +855,6 @@ class CsvFile:
         ) as file_handle:
             return list(csv.DictReader(file_handle))
 
-    def stream_rows(self) -> Iterator[dict[str, str]]:
-        """Walk the file row by row without holding it in memory.
-
-        The Wyscout event files are gigabytes once unpacked, so anything that
-        reads them has to stream. Use read_rows only for a file that comfortably
-        fits in memory, such as a lookup table.
-
-        Yields:
-            One dictionary per data row, keyed by the header line. Nothing at
-            all when the file does not exist yet.
-        """
-        if not self._target_file.exists():
-            return
-        with self._target_file.open(
-            encoding=CsvFileSetting.ENCODING,
-            newline=CsvFileSetting.NEW_LINE,
-            errors=CsvFileSetting.IGNORE_BROKEN_CHARACTERS,
-        ) as file_handle:
-            yield from csv.DictReader(file_handle)
-
     def read_finished_values(self, column_name: str) -> set[str]:
         """Read the values of one column that are already in the file.
 
@@ -1030,14 +1010,6 @@ class SharedFeatureFile:
         """Where the file lies, for the message at the end of a run."""
         return self._csv_file.path
 
-    def read_own_rows(self) -> list[dict[str, Any]]:
-        """Read what this source wrote in an earlier run."""
-        return [
-            row
-            for row in self._csv_file.read_rows()
-            if row.get(EventSourceSetting.SOURCE_COLUMN) == self._source_name
-        ]
-
     def read_own_table(self) -> pd.DataFrame:
         """Read back what this source wrote before, as a table."""
         every_row = self._csv_file.read_table()
@@ -1045,19 +1017,6 @@ class SharedFeatureFile:
             return every_row.iloc[0:0]
         return every_row[
             every_row[EventSourceSetting.SOURCE_COLUMN] == self._source_name
-        ]
-
-    def read_rows_of_the_other_source(self) -> list[dict[str, Any]]:
-        """Read what the other source wrote, so this run does not lose it.
-
-        Returns:
-            Every row another source is responsible for. An empty list when
-            the file does not exist yet.
-        """
-        return [
-            row
-            for row in self._csv_file.read_rows()
-            if row.get(EventSourceSetting.SOURCE_COLUMN) != self._source_name
         ]
 
     def read_finished_keys(self) -> set[tuple[str, str]]:
@@ -1069,41 +1028,13 @@ class SharedFeatureFile:
             other half did is none of its business, otherwise it would skip a
             season it never touched.
         """
-        return {
-            (
-                str(row.get(EventSourceSetting.COMPETITION_COLUMN)),
-                str(row.get(EventSourceSetting.SEASON_COLUMN)),
+        own_rows = self.read_own_table()
+        return set(
+            zip(
+                own_rows[EventSourceSetting.COMPETITION_COLUMN],
+                own_rows[EventSourceSetting.SEASON_COLUMN],
+                strict=True,
             )
-            for row in self.read_own_rows()
-        }
-
-    def write_keeping_the_other_source(self, own_rows: list[dict[str, Any]]) -> int:
-        """Write this source's rows without dropping the other source's.
-
-        Args:
-            own_rows: Everything this source produced. It replaces whatever
-                this source wrote before, and nothing else.
-
-        Returns:
-            How many rows the file holds afterwards, both sources counted.
-        """
-        all_rows = own_rows + self.read_rows_of_the_other_source()
-        self._csv_file.write_dict_rows(
-            self._sorted_the_way_this_file_always_is(all_rows)
-        )
-        return len(all_rows)
-
-    def _sorted_the_way_this_file_always_is(
-        self, rows: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """Sort the rows the one way this file is always sorted.
-
-        Two runs over the same data then give two identical files, so a diff
-        between them means something.
-        """
-        return sorted(
-            rows,
-            key=lambda row: tuple(str(row.get(name)) for name in self._sort_key_names),
         )
 
     def read_the_table_of_the_other_source(self) -> pd.DataFrame:
@@ -1707,9 +1638,8 @@ class PassingNetworkCalculator:
         lanes = self._count_per_lane(marked)
         player_count = per_player.groupby(self.TEAM_KEYS, sort=False).size()
         lane_count = self._lane_count_of_every_team(lanes, pass_count.index)
-        rate_places = PassingNetworkFeature.RATE_DECIMAL_PLACES
-        length_places = PassingNetworkFeature.LENGTH_DECIMAL_PLACES
-        rounded_rate = DecimalRounder(rate_places)
+        rounded_rate = DecimalRounder(PassingNetworkFeature.RATE_DECIMAL_PLACES)
+        rounded_length = DecimalRounder(PassingNetworkFeature.LENGTH_DECIMAL_PLACES)
         return pd.DataFrame(
             {
                 "passes": pass_count,
@@ -1719,14 +1649,10 @@ class PassingNetworkCalculator:
                 "forward_pass_share": rounded_rate.round_every_value(
                     of_the_team["went_forward"].sum() / pass_count
                 ),
-                "mean_pass_length_in_metres": DecimalRounder(
-                    length_places
-                ).round_every_value(
+                "mean_pass_length_in_metres": rounded_length.round_every_value(
                     of_the_team["how_far_the_ball_travelled"].sum() / pass_count
                 ),
-                "mean_forward_gain_in_metres": DecimalRounder(
-                    length_places
-                ).round_every_value(
+                "mean_forward_gain_in_metres": rounded_length.round_every_value(
                     of_the_team["forward_gain_in_metres"].sum() / pass_count
                 ),
                 "players_involved": player_count,
@@ -2194,15 +2120,18 @@ class ExpectedThreatGridFile:
                 f"No expected threat grid at {self._csv_file.path}. "
                 "Run the Wyscout builder first, it learns and writes it."
             )
-        values = [0.0] * (
+        written = self._csv_file.read_table()
+        of_the_cell = pd.Series(
+            ExactNumberReader().read_every_number(written["expected_threat"]).values,
+            index=written["grid_row"].astype(int) * ExpectedThreatFeature.COLUMN_COUNT
+            + written["grid_column"].astype(int),
+        )
+        cell_count = (
             ExpectedThreatFeature.COLUMN_COUNT * ExpectedThreatFeature.ROW_COUNT
         )
-        for row in self._csv_file.read_rows():
-            cell = int(row["grid_row"]) * ExpectedThreatFeature.COLUMN_COUNT + int(
-                row["grid_column"]
-            )
-            values[cell] = float(row["expected_threat"])
-        return ExpectedThreatGrid(values)
+        return ExpectedThreatGrid(
+            list(of_the_cell.reindex(range(cell_count)).fillna(0.0))
+        )
 
     def write(self, grid: ExpectedThreatGrid) -> None:
         """Write the grid down for the other source to pick up."""
