@@ -7,14 +7,14 @@ these tests touches the network.
 
 from datetime import date
 
-from wmguru.data.fetchers.club_elo_fetcher import ClubEloFetcher
-from wmguru.data.fetchers.match_weather_fetcher import MatchWeatherFetcher
-from wmguru.data.fetchers.reddit_activity_fetcher import RedditActivityFetcher
 from wmguru.helpers.utils import (
     StadiumLocator,
     TextNormalizer,
     WorldCupTeamNameReader,
 )
+from wmguru.preprocessing.fetchers.club_elo_fetcher import ClubEloFetcher
+from wmguru.preprocessing.fetchers.match_weather_fetcher import MatchWeatherFetcher
+from wmguru.preprocessing.fetchers.reddit_activity_fetcher import RedditActivityFetcher
 
 
 def make_weather_fetcher() -> MatchWeatherFetcher:

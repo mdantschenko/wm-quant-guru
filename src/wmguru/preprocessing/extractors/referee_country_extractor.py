@@ -7,13 +7,15 @@ referee confederation with team confederation is in hardly any model.
 
 from typing import Any
 
-from wmguru.data.downloads.statsbomb_match_list_reader import StatsBombMatchListReader
 from wmguru.helpers.constant import (
     RefereeCountryExtract,
     StatsBombSource,
     WebRequestSetting,
 )
 from wmguru.helpers.utils import CsvFile, WebFileDownloader
+from wmguru.preprocessing.downloads.statsbomb_match_list_reader import (
+    StatsBombMatchListReader,
+)
 
 
 class RefereeCountryExtractor:

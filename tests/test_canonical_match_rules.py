@@ -10,8 +10,8 @@ unique.
 
 import pandas as pd
 
-from wmguru.data.builders.canonical_match_builder import CanonicalMatchBuilder
 from wmguru.helpers.constant import CanonicalMatchDataset
+from wmguru.preprocessing.builders.canonical_match_builder import CanonicalMatchBuilder
 
 
 def make_results(**overrides: list[str]) -> pd.DataFrame:

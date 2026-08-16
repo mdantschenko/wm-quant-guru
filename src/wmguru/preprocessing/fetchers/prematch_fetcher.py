@@ -13,7 +13,7 @@ enough for one World Cup match day. The key goes into the environment variable
 API_FOOTBALL_KEY or into the key file. League and season can be set through the
 environment variables API_FOOTBALL_LEAGUE and API_FOOTBALL_SEASON.
 
-    python -m wmguru.data.fetchers.prematch_fetcher [YYYY-MM-DD]
+    python -m wmguru.preprocessing.fetchers.prematch_fetcher [YYYY-MM-DD]
 
 Without a date it uses today in UTC.
 """

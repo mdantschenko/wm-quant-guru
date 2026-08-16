@@ -5,11 +5,15 @@ scripts by hand, so they need a net that says whether they still behave the
 same. None of these tests touches the network.
 """
 
-from wmguru.data.downloads.football_data_downloader import FootballDataDownloader
-from wmguru.data.downloads.footystats_international_downloader import (
+from wmguru.preprocessing.downloads.football_data_downloader import (
+    FootballDataDownloader,
+)
+from wmguru.preprocessing.downloads.footystats_international_downloader import (
     FootyStatsInternationalDownloader,
 )
-from wmguru.data.downloads.statsbomb_lineup_downloader import StatsBombLineupDownloader
+from wmguru.preprocessing.downloads.statsbomb_lineup_downloader import (
+    StatsBombLineupDownloader,
+)
 
 
 def make_football_data_downloader() -> FootballDataDownloader:

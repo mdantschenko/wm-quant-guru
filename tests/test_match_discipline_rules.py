@@ -9,15 +9,15 @@ team finished with eleven when it did not.
 
 from typing import Any
 
-from wmguru.data.builders.statsbomb_match_discipline_builder import (
-    StatsBombMatchDisciplineBuilder,
-)
 from wmguru.helpers.data_class import StatsBombCompetition, WyscoutMatchFacts
 from wmguru.helpers.utils import (
     MatchDisciplineCounter,
     StatsBombOpenDataReader,
     TextNormalizer,
     WyscoutDataReader,
+)
+from wmguru.preprocessing.builders.statsbomb_match_discipline_builder import (
+    StatsBombMatchDisciplineBuilder,
 )
 
 

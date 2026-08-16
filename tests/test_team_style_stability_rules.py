@@ -11,8 +11,10 @@ zero.
 
 import pandas as pd
 
-from wmguru.data.builders.team_style_stability_builder import TeamStyleStabilityBuilder
 from wmguru.helpers.constant import TeamStyleStabilityCalculation
+from wmguru.preprocessing.builders.team_style_stability_builder import (
+    TeamStyleStabilityBuilder,
+)
 
 OTHER_DIMENSIONS = [
     name for name in TeamStyleStabilityCalculation.DIMENSIONS if name != "pass_share"

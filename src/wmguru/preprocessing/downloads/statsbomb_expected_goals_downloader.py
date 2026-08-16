@@ -10,7 +10,6 @@ fetched again from the repository at any time.
 
 from typing import Any
 
-from wmguru.data.downloads.statsbomb_match_list_reader import StatsBombMatchListReader
 from wmguru.helpers.constant import (
     StatsBombSource,
     WebRequestSetting,
@@ -18,6 +17,9 @@ from wmguru.helpers.constant import (
 from wmguru.helpers.utils import (
     CsvFile,
     WebFileDownloader,
+)
+from wmguru.preprocessing.downloads.statsbomb_match_list_reader import (
+    StatsBombMatchListReader,
 )
 
 

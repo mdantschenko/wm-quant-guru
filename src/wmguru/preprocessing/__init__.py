@@ -1,7 +1,11 @@
-"""The steps that turn a raw source into the table every builder groups over.
+"""Everything that runs offline, by hand, and leaves a file behind.
 
-A step here is run by hand, not by a builder. It costs minutes, it gives the
-same answer every time, and every builder that reads its output would
-otherwise pay the price again. Run a step again whenever its raw source
-changes, and never expect a builder to do it.
+downloads fetch whole datasets, fetchers ask an endpoint per item, extractors
+pull a part out of a dataset that is already on disk, prepared_tables turn a
+raw source into the table the builders group over, builders derive features,
+compute works out numbers that no source carries, and tools report on what
+came out.
+
+Nothing in here is called while a model, a price or a decision is worked out.
+Those layers only ever read the files this one wrote.
 """

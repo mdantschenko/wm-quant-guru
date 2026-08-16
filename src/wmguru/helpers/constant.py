@@ -656,7 +656,9 @@ class PreparedTablePath:
     WYSCOUT_MATCH_IDENTITY_FILE: Path = FOLDER / (
         "wyscout_match_identities" + FILE_SUFFIX
     )
-    PREPARE_COMMAND: str = "python -m wmguru.preprocessing.wyscout_action_table_builder"
+    PREPARE_COMMAND: str = (
+        "python -m wmguru.preprocessing.prepared_tables.wyscout_action_table_builder"
+    )
 
 
 class CsvFileSetting:

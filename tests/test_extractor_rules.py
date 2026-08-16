@@ -5,11 +5,11 @@ across three old scripts, one of which changed the filter of another at run
 time. They now live in one place, so they get a proper net.
 """
 
-from wmguru.data.extractors.beat_the_bookie_odds_extractor import (
-    BeatTheBookieOddsExtractor,
-)
 from wmguru.helpers.constant import InternationalOddsExtract, UefaClubOddsExtract
 from wmguru.helpers.utils import TextNormalizer
+from wmguru.preprocessing.extractors.beat_the_bookie_odds_extractor import (
+    BeatTheBookieOddsExtractor,
+)
 
 
 def make_extractor() -> BeatTheBookieOddsExtractor:

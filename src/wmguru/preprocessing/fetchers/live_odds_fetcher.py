@@ -9,8 +9,8 @@ The key is free at the-odds-api.com, its free tier allows 500 requests a month.
 It belongs in an environment variable, never in the code and never in git.
 
 Two modes:
-    python -m wmguru.data.fetchers.live_odds_fetcher sports  list competitions
-    python -m wmguru.data.fetchers.live_odds_fetcher odds    take a snapshot
+    python -m wmguru.preprocessing.fetchers.live_odds_fetcher sports  list competitions
+    python -m wmguru.preprocessing.fetchers.live_odds_fetcher odds    take a snapshot
 """
 
 import json
