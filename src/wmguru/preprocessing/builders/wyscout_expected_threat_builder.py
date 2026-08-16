@@ -1,39 +1,35 @@
 """The expected threat grid, learned on and applied to the Wyscout actions.
 
 The grid is learned here and written down, so the StatsBomb half applies the
-very same one. Learning walks the action file twice: once to count what
-happens in each cell, once to add up what each player and team was worth.
+very same one. Learning counts what happens in each cell of the pitch and then
+solves for what each cell is worth.
 
 Only open play counts. A corner or a penalty would push the goal rate of its
 cell far above what that place on the pitch is really worth.
 """
 
-from typing import Any
+import numpy as np
+import pandas as pd
 
 from wmguru.helpers.constant import (
     EventSourceSetting,
     ExpectedThreatFeature,
 )
-from wmguru.helpers.data_class import (
-    MatchAction,
-    WyscoutMatchFacts,
-    WyscoutNameLookups,
-)
 from wmguru.helpers.utils import (
     CsvFile,
+    DecimalRounder,
     ExpectedThreatGrid,
     ExpectedThreatGridFile,
+    PreparedWyscoutTables,
     SharedFeatureFile,
-    TextNormalizer,
-    WyscoutDataReader,
 )
 
 
 class WyscoutExpectedThreatBuilder:
     """The grid learned off the Wyscout actions, and every move valued with it."""
 
-    def __init__(self, wyscout_data_reader: WyscoutDataReader) -> None:
-        self._wyscout_data_reader = wyscout_data_reader
+    def __init__(self, prepared_tables: PreparedWyscoutTables) -> None:
+        self._prepared_tables = prepared_tables
         self._grid_file = ExpectedThreatGridFile(
             CsvFile(
                 ExpectedThreatFeature.GRID_FILE,
@@ -63,54 +59,87 @@ class WyscoutExpectedThreatBuilder:
         Returns:
             How many team rows the team file holds afterwards, the rows the
             StatsBomb half wrote included.
+
+        Raises:
+            SystemExit: When the actions have not been prepared yet.
         """
-        lookups = self._wyscout_data_reader.read_name_lookups()
-        grid = self._learn_the_grid(lookups)
+        actions = self._actions_with_their_cells()
+        grid = self._learn_the_grid(actions)
         self._grid_file.write(grid)
         print(f"  OK    grid learned, {grid.describe_the_best_cell()}")
 
-        player_rows, team_rows = self._value_every_move(grid, lookups)
-        self._player_file.write_keeping_the_other_source(player_rows)
-        team_total = self._team_file.write_keeping_the_other_source(team_rows)
+        identities = self._prepared_tables.read_the_match_identities()
+        valued_moves = self._value_every_move(actions, grid)
+        player_rows = self._build_player_rows(valued_moves, identities)
+        team_rows = self._build_team_rows(valued_moves, identities)
+        self._player_file.write_the_table_keeping_the_other_source(player_rows)
+        team_total = self._team_file.write_the_table_keeping_the_other_source(team_rows)
         print(
             f"  OK    {len(player_rows)} player rows and {len(team_rows)} team rows "
             f"from Wyscout, {team_total} team rows in all"
         )
         return team_total
 
-    def _learn_the_grid(self, lookups: WyscoutNameLookups) -> ExpectedThreatGrid:
-        """Count what happens in each cell, then solve for the value of each."""
-        empty_grid = ExpectedThreatGrid(
-            [0.0]
-            * (ExpectedThreatFeature.COLUMN_COUNT * ExpectedThreatFeature.ROW_COUNT)
+    def _actions_with_their_cells(self) -> pd.DataFrame:
+        """Read the actions, each with the cell it started and ended in."""
+        actions = self._prepared_tables.read_the_actions()
+        empty_grid = ExpectedThreatGrid([0.0] * self._cell_count())
+        return actions.assign(
+            start_cell=empty_grid.which_cell_every_place_falls_into(
+                actions["start_x_in_metres"], actions["start_y_in_metres"]
+            ),
+            end_cell=empty_grid.which_cell_every_place_falls_into(
+                actions["end_x_in_metres"], actions["end_y_in_metres"]
+            ),
+            is_a_shot=actions["kind"].isin(ExpectedThreatFeature.SHOT_KINDS),
+            is_a_completed_move=actions["kind"].isin(ExpectedThreatFeature.MOVE_KINDS)
+            & actions["was_successful"],
         )
-        cell_count = len(empty_grid.values)
-        shots = [0] * cell_count
-        goals = [0] * cell_count
-        moves = [0] * cell_count
-        moves_to_cell = [[0] * cell_count for _ in range(cell_count)]
 
-        for _game, actions in self._wyscout_data_reader.stream_actions_of_every_match(
-            lookups
-        ):
-            for action in actions:
-                start_cell, end_cell = self._which_cells_the_action_ran_between(
-                    empty_grid, action
-                )
-                if action.kind in ExpectedThreatFeature.SHOT_KINDS:
-                    shots[start_cell] += 1
-                    goals[start_cell] += 1 if action.was_successful else 0
-                elif self._is_a_completed_move(action):
-                    moves[start_cell] += 1
-                    moves_to_cell[start_cell][end_cell] += 1
-        return self._solve(shots, goals, moves, moves_to_cell)
+    def _cell_count(self) -> int:
+        """How many cells the pitch is cut into."""
+        return ExpectedThreatFeature.COLUMN_COUNT * ExpectedThreatFeature.ROW_COUNT
+
+    def _learn_the_grid(self, actions: pd.DataFrame) -> ExpectedThreatGrid:
+        """Count what happens in each cell, then solve for the value of each."""
+        shots_of_cell = self._counted_per_cell(actions[actions["is_a_shot"]])
+        goals_of_cell = self._counted_per_cell(
+            actions[actions["is_a_shot"] & actions["was_successful"]]
+        )
+        completed_moves = actions[actions["is_a_completed_move"]]
+        moves_of_cell = self._counted_per_cell(completed_moves)
+        return self._solve(
+            shots_of_cell,
+            goals_of_cell,
+            moves_of_cell,
+            self._moves_between_the_cells(completed_moves),
+        )
+
+    def _counted_per_cell(self, actions: pd.DataFrame) -> np.ndarray:
+        """Count how often something happened in each cell of the pitch."""
+        return np.bincount(actions["start_cell"], minlength=self._cell_count()).astype(
+            float
+        )
+
+    def _moves_between_the_cells(self, completed_moves: pd.DataFrame) -> np.ndarray:
+        """Count how often the ball went from each cell to each other cell."""
+        cell_count = self._cell_count()
+        return (
+            np.bincount(
+                completed_moves["start_cell"] * cell_count
+                + completed_moves["end_cell"],
+                minlength=cell_count * cell_count,
+            )
+            .astype(float)
+            .reshape(cell_count, cell_count)
+        )
 
     def _solve(
         self,
-        shots: list[int],
-        goals: list[int],
-        moves: list[int],
-        moves_to_cell: list[list[int]],
+        shots_of_cell: np.ndarray,
+        goals_of_cell: np.ndarray,
+        moves_of_cell: np.ndarray,
+        moves_between_the_cells: np.ndarray,
     ) -> ExpectedThreatGrid:
         """Work out what each cell is worth, going round until it settles.
 
@@ -118,181 +147,145 @@ class WyscoutExpectedThreatBuilder:
         and what the cells it is moved to are worth when it is not. That is
         circular, so it is solved by passing over the grid a few times.
         """
-        cell_count = len(shots)
-        values = [0.0] * cell_count
-        for _round in range(ExpectedThreatFeature.SOLVING_ROUNDS):
-            updated = [0.0] * cell_count
-            for cell in range(cell_count):
-                events_in_cell = shots[cell] + moves[cell]
-                if not events_in_cell:
-                    continue
-                scoring_chance = goals[cell] / shots[cell] if shots[cell] else 0.0
-                updated[cell] = (shots[cell] / events_in_cell) * scoring_chance + (
-                    moves[cell] / events_in_cell
-                ) * self._value_moved_to(moves_to_cell[cell], moves[cell], values)
-            values = updated
-        return ExpectedThreatGrid(values)
-
-    def _value_moved_to(
-        self, moves_to_cell: list[int], move_count: int, values: list[float]
-    ) -> float:
-        """What the ball was worth on average after it was moved on."""
-        if not move_count:
-            return 0.0
-        return (
-            sum(
-                count * values[target]
-                for target, count in enumerate(moves_to_cell)
-                if count
-            )
-            / move_count
+        events_in_cell = shots_of_cell + moves_of_cell
+        was_ever_used = events_in_cell > 0
+        scoring_chance = np.divide(
+            goals_of_cell,
+            shots_of_cell,
+            out=np.zeros_like(goals_of_cell),
+            where=shots_of_cell > 0,
         )
+        shot_share = np.divide(
+            shots_of_cell,
+            events_in_cell,
+            out=np.zeros_like(shots_of_cell),
+            where=was_ever_used,
+        )
+        move_share = np.divide(
+            moves_of_cell,
+            events_in_cell,
+            out=np.zeros_like(moves_of_cell),
+            where=was_ever_used,
+        )
+        values = np.zeros(len(shots_of_cell))
+        for _round in range(ExpectedThreatFeature.SOLVING_ROUNDS):
+            value_moved_to = np.divide(
+                moves_between_the_cells @ values,
+                moves_of_cell,
+                out=np.zeros_like(values),
+                where=moves_of_cell > 0,
+            )
+            values = shot_share * scoring_chance + move_share * value_moved_to
+        return ExpectedThreatGrid(list(values))
 
     def _value_every_move(
-        self, grid: ExpectedThreatGrid, lookups: WyscoutNameLookups
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Add up what every player and team was worth, per match."""
-        match_facts = self._wyscout_data_reader.read_match_facts()
-        per_player: dict[tuple[str, str, str], list[float]] = {}
-        per_team: dict[tuple[str, str], list[float]] = {}
-
-        for game, actions in self._wyscout_data_reader.stream_actions_of_every_match(
-            lookups
-        ):
-            for action in actions:
-                if not self._is_a_completed_move(action):
-                    continue
-                start_cell, end_cell = self._which_cells_the_action_ran_between(
-                    grid, action
-                )
-                gained = grid.gain_between(start_cell, end_cell)
-                self._count_one_valued_move(
-                    per_player, (action.player_name, game, action.team_name), gained
-                )
-                self._count_one_valued_move(per_team, (action.team_name, game), gained)
-        return (
-            self._build_player_rows(per_player, match_facts, lookups),
-            self._build_team_rows(per_team, match_facts, lookups),
+        self, actions: pd.DataFrame, grid: ExpectedThreatGrid
+    ) -> pd.DataFrame:
+        """Say of every completed move what it was worth to its player and team."""
+        completed_moves = actions[actions["is_a_completed_move"]]
+        return completed_moves.assign(
+            gained=grid.gain_of_every_move(
+                completed_moves["start_cell"], completed_moves["end_cell"]
+            )
         )
-
-    def _count_one_valued_move(
-        self, totals: dict[Any, list[float]], key: Any, gained: float
-    ) -> None:
-        """Add one valued move to a running total."""
-        total = totals.setdefault(key, [0.0, 0.0])
-        total[0] += gained
-        total[1] += 1
 
     def _build_player_rows(
-        self,
-        per_player: dict[tuple[str, str, str], list[float]],
-        match_facts: dict[str, WyscoutMatchFacts],
-        lookups: WyscoutNameLookups,
-    ) -> list[dict[str, Any]]:
+        self, valued_moves: pd.DataFrame, identities: pd.DataFrame
+    ) -> pd.DataFrame:
         """Build one row per player and match."""
-        rows: list[dict[str, Any]] = []
-        for (player_name, game, team_name), (gained, moves) in per_player.items():
-            facts = match_facts.get(game)
-            if facts is None:
-                continue
-            rows.append(
-                {
-                    EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.WYSCOUT_NAME,
-                    **self._the_columns_both_files_share(facts, lookups, team_name),
-                    "player": player_name,
-                    "moves": int(moves),
-                    "expected_threat_added": round(
-                        gained, ExpectedThreatFeature.TOTAL_DECIMAL_PLACES
-                    ),
-                    "expected_threat_added_per_move": (
-                        round(
-                            gained / moves,
-                            ExpectedThreatFeature.PER_MOVE_DECIMAL_PLACES,
-                        )
-                        if moves
-                        else ""
-                    ),
-                }
-            )
-        return rows
+        per_player = self._added_up_over(
+            valued_moves, ["player_name", "game_identifier", "team_name"]
+        )
+        of_named_matches = per_player.merge(identities, on="game_identifier")
+        return pd.DataFrame(
+            {
+                EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.WYSCOUT_NAME,
+                **self._the_columns_both_files_share(of_named_matches),
+                "player": of_named_matches["player_name"],
+                "moves": of_named_matches["moves"],
+                "expected_threat_added": DecimalRounder(
+                    ExpectedThreatFeature.TOTAL_DECIMAL_PLACES
+                ).round_every_value(of_named_matches["gained"]),
+                "expected_threat_added_per_move": DecimalRounder(
+                    ExpectedThreatFeature.PER_MOVE_DECIMAL_PLACES
+                ).round_every_value(
+                    of_named_matches["gained"] / of_named_matches["moves"]
+                ),
+            }
+        )
 
     def _build_team_rows(
-        self,
-        per_team: dict[tuple[str, str], list[float]],
-        match_facts: dict[str, WyscoutMatchFacts],
-        lookups: WyscoutNameLookups,
-    ) -> list[dict[str, Any]]:
+        self, valued_moves: pd.DataFrame, identities: pd.DataFrame
+    ) -> pd.DataFrame:
         """Build one row per team and match, with what the other side was worth."""
-        rows: list[dict[str, Any]] = []
-        for (team_name, game), (gained, moves) in per_team.items():
-            facts = match_facts.get(game)
-            if facts is None:
-                continue
-            match_columns = self._the_columns_both_files_share(
-                facts, lookups, team_name
-            )
-            conceded = per_team.get((match_columns["opponent"], game), [0.0, 0.0])[0]
-            places = ExpectedThreatFeature.TOTAL_DECIMAL_PLACES
-            rows.append(
-                {
-                    EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.WYSCOUT_NAME,
-                    **match_columns,
-                    "is_home": int(
-                        team_name
-                        == lookups.team_names.get(
-                            facts.home_team_identifier, facts.home_team_identifier
-                        )
-                    ),
-                    "moves": int(moves),
-                    "expected_threat_for": round(gained, places),
-                    "expected_threat_against": round(conceded, places),
-                    "expected_threat_net": round(gained - conceded, places),
-                }
-            )
-        return rows
+        per_team = self._added_up_over(valued_moves, ["team_name", "game_identifier"])
+        of_named_matches = per_team.merge(identities, on="game_identifier")
+        shared_columns = self._the_columns_both_files_share(of_named_matches)
+        gained = of_named_matches["gained"]
+        conceded = self._what_the_other_side_gained(
+            of_named_matches, shared_columns["opponent"], per_team
+        )
+        rounder = DecimalRounder(ExpectedThreatFeature.TOTAL_DECIMAL_PLACES)
+        return pd.DataFrame(
+            {
+                EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.WYSCOUT_NAME,
+                **shared_columns,
+                "is_home": (
+                    of_named_matches["team_name"] == of_named_matches["home_team_name"]
+                ).astype(int),
+                "moves": of_named_matches["moves"],
+                "expected_threat_for": rounder.round_every_value(gained),
+                "expected_threat_against": rounder.round_every_value(conceded),
+                "expected_threat_net": rounder.round_every_value(gained - conceded),
+            }
+        )
+
+    def _what_the_other_side_gained(
+        self,
+        of_named_matches: pd.DataFrame,
+        opponent_name: pd.Series,
+        per_team: pd.DataFrame,
+    ) -> pd.Series:
+        """Look up what the other side was worth, zero where it made no move."""
+        looked_up = pd.DataFrame(
+            {
+                "game_identifier": of_named_matches["game_identifier"],
+                "team_name": opponent_name,
+            }
+        ).merge(
+            per_team[["game_identifier", "team_name", "gained"]],
+            on=["game_identifier", "team_name"],
+            how="left",
+        )
+        return looked_up["gained"].fillna(0.0).set_axis(of_named_matches.index)
+
+    def _added_up_over(
+        self, valued_moves: pd.DataFrame, keys: list[str]
+    ) -> pd.DataFrame:
+        """Add up what was gained and how many moves it took, over the given keys."""
+        return (
+            valued_moves.groupby(keys, sort=False)
+            .agg(gained=("gained", "sum"), moves=("gained", "size"))
+            .reset_index()
+        )
 
     def _the_columns_both_files_share(
-        self,
-        facts: WyscoutMatchFacts,
-        lookups: WyscoutNameLookups,
-        team_name: str,
-    ) -> dict[str, Any]:
+        self, of_named_matches: pd.DataFrame
+    ) -> dict[str, pd.Series]:
         """Build the columns both output files have in common."""
-        home_team = lookups.team_names.get(
-            facts.home_team_identifier, facts.home_team_identifier
-        )
-        away_team = lookups.team_names.get(
-            facts.away_team_identifier, facts.away_team_identifier
+        plays_at_home = (
+            of_named_matches["team_name"] == of_named_matches["home_team_name"]
         )
         return {
-            "date": facts.match_date,
-            "competition": lookups.competition_names.get(
-                facts.competition_identifier, facts.competition_identifier
+            "date": of_named_matches["match_date"],
+            "competition": of_named_matches["competition_name"],
+            "season": of_named_matches["season_name"],
+            "team": of_named_matches["team_name"],
+            "opponent": of_named_matches["away_team_name"].where(
+                plays_at_home, of_named_matches["home_team_name"]
             ),
-            "season": facts.season_name,
-            "team": team_name,
-            "opponent": away_team if team_name == home_team else home_team,
         }
-
-    def _is_a_completed_move(self, action: MatchAction) -> bool:
-        """Return True when the ball was moved on and reached its target."""
-        return action.kind in ExpectedThreatFeature.MOVE_KINDS and action.was_successful
-
-    def _which_cells_the_action_ran_between(
-        self, grid: ExpectedThreatGrid, action: MatchAction
-    ) -> tuple[int, int]:
-        """Say which cell an action started in and which one it ended in."""
-        return (
-            grid.which_cell_the_place_falls_into(
-                action.start_x_in_metres, action.start_y_in_metres
-            ),
-            grid.which_cell_the_place_falls_into(
-                action.end_x_in_metres, action.end_y_in_metres
-            ),
-        )
 
 
 if __name__ == "__main__":
-    WyscoutExpectedThreatBuilder(
-        WyscoutDataReader(TextNormalizer())
-    ).build_every_match()
+    WyscoutExpectedThreatBuilder(PreparedWyscoutTables()).build_every_match()

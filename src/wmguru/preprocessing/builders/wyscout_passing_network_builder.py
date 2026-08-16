@@ -4,25 +4,18 @@ Only a pass out of open play counts. Wyscout names no receiver, so the next
 action of the same team is taken as the player who got the ball.
 """
 
-from typing import Any
+import pandas as pd
 
 from wmguru.helpers.constant import (
     EventSourceSetting,
     MatchStyleFeature,
     PassingNetworkFeature,
 )
-from wmguru.helpers.data_class import (
-    MatchAction,
-    TeamPass,
-    WyscoutMatchFacts,
-    WyscoutNameLookups,
-)
 from wmguru.helpers.utils import (
     CsvFile,
     PassingNetworkCalculator,
+    PreparedWyscoutTables,
     SharedFeatureFile,
-    TextNormalizer,
-    WyscoutDataReader,
 )
 
 
@@ -31,10 +24,10 @@ class WyscoutPassingNetworkBuilder:
 
     def __init__(
         self,
-        wyscout_data_reader: WyscoutDataReader,
+        prepared_tables: PreparedWyscoutTables,
         passing_network_calculator: PassingNetworkCalculator,
     ) -> None:
-        self._wyscout_data_reader = wyscout_data_reader
+        self._prepared_tables = prepared_tables
         self._passing_network_calculator = passing_network_calculator
         self._output_file = SharedFeatureFile(
             CsvFile(
@@ -46,107 +39,81 @@ class WyscoutPassingNetworkBuilder:
         )
 
     def build_every_match(self) -> int:
-        """Walk the action file and write one row per team and match.
+        """Group the prepared actions and write one row per team and match.
 
         Returns:
             How many rows the file holds afterwards, the rows the StatsBomb
             half wrote included.
-        """
-        match_facts = self._wyscout_data_reader.read_match_facts()
-        lookups = self._wyscout_data_reader.read_name_lookups()
 
-        rows: list[dict[str, Any]] = []
-        for (
-            game_identifier,
-            actions,
-        ) in self._wyscout_data_reader.stream_actions_of_every_match(lookups):
-            facts = match_facts.get(game_identifier)
-            if facts is None:
-                continue
-            rows.extend(self._build_rows_of_one_match(actions, facts, lookups))
-        total_count = self._output_file.write_keeping_the_other_source(rows)
+        Raises:
+            SystemExit: When the actions have not been prepared yet.
+        """
+        actions = self._prepared_tables.read_the_actions_with_the_next_player()
+        identities = self._prepared_tables.read_the_match_identities()
+
+        summaries = self._passing_network_calculator.summarise_every_team(
+            self._every_open_play_pass(actions)
+        )
+        rows = self._build_the_rows_of_every_team(summaries, identities)
+        total_count = self._output_file.write_the_table_keeping_the_other_source(rows)
         print(f"  OK    {len(rows)} team rows from Wyscout, {total_count} in all")
         return total_count
 
-    def _build_rows_of_one_match(
-        self,
-        actions: list[MatchAction],
-        facts: WyscoutMatchFacts,
-        lookups: WyscoutNameLookups,
-    ) -> list[dict[str, Any]]:
-        """Build the row of each team that played a pass in one match."""
-        passes_of_team = self._read_passes_per_team(actions)
-        home_team = lookups.team_names.get(
-            facts.home_team_identifier, facts.home_team_identifier
-        )
-        away_team = lookups.team_names.get(
-            facts.away_team_identifier, facts.away_team_identifier
-        )
+    def _every_open_play_pass(self, actions: pd.DataFrame) -> pd.DataFrame:
+        """Keep the open play passes, each with whoever most likely received it.
 
-        rows: list[dict[str, Any]] = []
-        for team_name, opponent_name in (
-            (home_team, away_team),
-            (away_team, home_team),
-        ):
-            passes = passes_of_team.get(team_name)
-            if not passes:
-                continue
-            rows.append(
-                {
-                    EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.WYSCOUT_NAME,
-                    "game_id": facts.game_identifier,
-                    "competition": lookups.competition_names.get(
-                        facts.competition_identifier, facts.competition_identifier
-                    ),
-                    "season": facts.season_name,
-                    "date": facts.match_date,
-                    "team": team_name,
-                    "opponent": opponent_name,
-                    "is_home": int(team_name == home_team),
-                    **self._passing_network_calculator.summarise(passes),
-                }
-            )
-        return rows
-
-    def _read_passes_per_team(
-        self, actions: list[MatchAction]
-    ) -> dict[str, list[TeamPass]]:
-        """Collect the open play passes of one match, per team."""
-        passes_of_team: dict[str, list[TeamPass]] = {}
-        for index, action in enumerate(actions):
-            if action.kind != MatchStyleFeature.OPEN_PASS_KIND:
-                continue
-            passes_of_team.setdefault(action.team_name, []).append(
-                TeamPass(
-                    passer_name=action.player_name,
-                    receiver_name=self._receiver_name_of(actions, index),
-                    start_x_in_metres=action.start_x_in_metres,
-                    start_y_in_metres=action.start_y_in_metres,
-                    end_x_in_metres=action.end_x_in_metres,
-                    end_y_in_metres=action.end_y_in_metres,
-                    was_successful=action.was_successful,
-                )
-            )
-        return passes_of_team
-
-    def _receiver_name_of(self, actions: list[MatchAction], index: int) -> str:
-        """Read who played the next action, if the same team kept the ball.
-
-        Returns:
-            The name of the player who most likely received the pass, or an
-            empty name when the ball went to the other side or the pass was
-            the last action of the match.
+        A pass that was lost, and one that was the last action of its match,
+        reached nobody and forms no lane.
         """
-        action = actions[index]
-        if not action.was_successful or index + 1 >= len(actions):
-            return ""
-        next_action = actions[index + 1]
-        if next_action.team_name != action.team_name:
-            return ""
-        return next_action.player_name
+        is_an_open_play_pass = actions["kind"] == MatchStyleFeature.OPEN_PASS_KIND
+        reached_a_team_mate = actions["was_successful"] & (
+            actions["team_of_the_next_action"] == actions["team_name"]
+        )
+        return actions[is_an_open_play_pass].assign(
+            passer_name=actions.loc[is_an_open_play_pass, "player_name"],
+            receiver_name=actions.loc[is_an_open_play_pass, "player_of_the_next_action"]
+            .where(reached_a_team_mate[is_an_open_play_pass], "")
+            .astype(str),
+        )
+
+    def _build_the_rows_of_every_team(
+        self, summaries: pd.DataFrame, identities: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Put the match around every summary and say which side played it.
+
+        A team the match names as neither side gets no row: the file would
+        otherwise claim it played the home team.
+        """
+        of_named_matches = summaries.merge(identities, on="game_identifier")
+        plays_at_home = (
+            of_named_matches["team_name"] == of_named_matches["home_team_name"]
+        )
+        plays_in_this_match = plays_at_home | (
+            of_named_matches["team_name"] == of_named_matches["away_team_name"]
+        )
+        of_named_matches = of_named_matches[plays_in_this_match].reset_index(drop=True)
+        plays_at_home = plays_at_home[plays_in_this_match].reset_index(drop=True)
+        return pd.DataFrame(
+            {
+                EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.WYSCOUT_NAME,
+                "game_id": of_named_matches["game_identifier"],
+                "competition": of_named_matches["competition_name"],
+                "season": of_named_matches["season_name"],
+                "date": of_named_matches["match_date"],
+                "team": of_named_matches["team_name"],
+                "opponent": of_named_matches["away_team_name"].where(
+                    plays_at_home, of_named_matches["home_team_name"]
+                ),
+                "is_home": plays_at_home.astype(int),
+                **{
+                    name: of_named_matches[name]
+                    for name in PassingNetworkFeature.SUMMARY_COLUMN_NAMES
+                },
+            }
+        )
 
 
 if __name__ == "__main__":
     WyscoutPassingNetworkBuilder(
-        WyscoutDataReader(TextNormalizer()), PassingNetworkCalculator()
+        PreparedWyscoutTables(), PassingNetworkCalculator()
     ).build_every_match()

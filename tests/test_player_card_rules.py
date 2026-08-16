@@ -6,6 +6,8 @@ StatsBomb carries a card without a foul on a second event type that is easy to
 forget.
 """
 
+import pandas as pd
+
 from wmguru.helpers.utils import (
     StatsBombOpenDataReader,
     TextNormalizer,
@@ -13,9 +15,14 @@ from wmguru.helpers.utils import (
 )
 
 
-def make_wyscout_reader() -> WyscoutDataReader:
-    """Build the Wyscout reader, which reads no file in these tests."""
-    return WyscoutDataReader(TextNormalizer())
+def cards_of(*tag_lists: str) -> list[list[str]]:
+    """Read a few tag cells at once and name the cards each one carries."""
+    read = WyscoutDataReader(TextNormalizer()).read_the_card_of_every_event(
+        pd.Series(list(tag_lists))
+    )
+    return [
+        [name for name in read.columns if row[name]] for _index, row in read.iterrows()
+    ]
 
 
 def make_statsbomb_reader() -> StatsBombOpenDataReader:
@@ -24,36 +31,29 @@ def make_statsbomb_reader() -> StatsBombOpenDataReader:
 
 
 def test_a_yellow_card_tag_is_recognised():
-    reader = make_wyscout_reader()
-
-    assert reader.read_card_names_out_of_tag_list("[{'id': 1702}]") == ["yellow"]
+    assert cards_of("[{'id': 1702}]") == [["yellow"]]
 
 
 def test_a_red_and_a_second_yellow_are_told_apart():
-    reader = make_wyscout_reader()
-
-    assert reader.read_card_names_out_of_tag_list("[{'id': 1701}]") == ["red"]
-    assert reader.read_card_names_out_of_tag_list("[{'id': 1703}]") == ["second_yellow"]
+    assert cards_of("[{'id': 1701}]", "[{'id': 1703}]") == [["red"], ["second_yellow"]]
 
 
 def test_a_tag_that_only_starts_with_the_same_digits_is_no_card():
     """1704 and 1700 sit right next to the card tags and mean something else."""
-    reader = make_wyscout_reader()
+    assert cards_of("[{'id': 1704}]", "[{'id': 1700}]") == [[], []]
 
-    assert reader.read_card_names_out_of_tag_list("[{'id': 1704}]") == []
-    assert reader.read_card_names_out_of_tag_list("[{'id': 1700}]") == []
+
+def test_a_tag_that_merely_contains_a_card_number_is_no_card():
+    """17020 holds 1702 in its digits without ever being a yellow."""
+    assert cards_of("[{'id': 17020}]", "[{'id': 21702}]") == [[], []]
 
 
 def test_a_card_tag_is_found_among_other_tags():
-    names = make_wyscout_reader().read_card_names_out_of_tag_list(
-        "[{'id': 401}, {'id': 1702}]"
-    )
-
-    assert names == ["yellow"]
+    assert cards_of("[{'id': 401}, {'id': 1702}]") == [["yellow"]]
 
 
 def test_an_event_without_any_tag_carries_no_card():
-    assert make_wyscout_reader().read_card_names_out_of_tag_list("[]") == []
+    assert cards_of("[]") == [[]]
 
 
 def test_a_statsbomb_card_on_a_foul_is_read():

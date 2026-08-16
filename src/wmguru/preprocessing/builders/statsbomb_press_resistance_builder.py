@@ -3,35 +3,31 @@
 StatsBomb marks an action as played under pressure, so this can be read off
 rather than guessed. Passes, carries and take ons are counted with and without
 pressure, together with the two ways of simply losing the ball.
-
-The file is written after every competition, so a stopped run picks up where it
-left off.
 """
 
-from typing import Any
+import pandas as pd
 
 from wmguru.helpers.constant import (
     EventSourceSetting,
     ExpectedThreatFeature,
     MatchStyleFeature,
     PressResistanceFeature,
-    StatsBombOpenDataSource,
-    WebRequestSetting,
 )
-from wmguru.helpers.data_class import StatsBombCompetition
 from wmguru.helpers.utils import (
     CsvFile,
+    DecimalRounder,
+    PreparedStatsBombTables,
     SharedFeatureFile,
-    StatsBombOpenDataReader,
-    WebFileDownloader,
 )
 
 
 class StatsBombPressResistanceBuilder:
     """The pressured actions of every player of every free competition."""
 
-    def __init__(self, statsbomb_reader: StatsBombOpenDataReader) -> None:
-        self._statsbomb_reader = statsbomb_reader
+    PLAYER_KEYS = ["game_identifier", "player_name"]
+
+    def __init__(self, prepared_tables: PreparedStatsBombTables) -> None:
+        self._prepared_tables = prepared_tables
         self._output_file = SharedFeatureFile(
             CsvFile(
                 PressResistanceFeature.OUTPUT_FILE,
@@ -41,188 +37,116 @@ class StatsBombPressResistanceBuilder:
             PressResistanceFeature.SORT_KEY_NAMES,
         )
 
-    def build_every_competition(self) -> int:
-        """Walk every open competition and write the file after each one.
+    def build_every_match(self) -> int:
+        """Group the prepared events and write one row per player and match.
 
         Returns:
             How many rows the file holds afterwards.
 
         Raises:
-            SystemExit: When the competition list could not be loaded.
+            SystemExit: When the events have not been prepared yet.
         """
-        own_rows = self._output_file.read_own_rows()
-        open_competitions = self._statsbomb_reader.read_open_competitions(
-            self._output_file.read_finished_keys()
-        )
-        print(f"Open competitions {len(open_competitions)}", flush=True)
-
-        total_count = len(own_rows)
-        for competition in open_competitions:
-            for match in self._statsbomb_reader.read_matches(competition):
-                own_rows.extend(self._build_rows_of_one_match(match, competition))
-            total_count = self._output_file.write_keeping_the_other_source(own_rows)
-            print(
-                f"  SAVED  {competition.competition_name} "
-                f"{competition.season_name} (file now {total_count})",
-                flush=True,
-            )
-        print(f"\nDone: the press resistance file holds {total_count} rows.")
+        rows = self._build_the_rows_of_every_player()
+        total_count = self._output_file.write_the_table_keeping_the_other_source(rows)
+        print(f"  OK    {len(rows)} player rows from StatsBomb, {total_count} in all")
         return total_count
 
-    def _build_rows_of_one_match(
-        self, match: dict[str, Any], competition: StatsBombCompetition
-    ) -> list[dict[str, Any]]:
-        """Build one row per player who touched the ball in one match."""
-        counters: dict[str, dict[str, float]] = {}
-        team_of_player: dict[str, str] = {}
-        for event in self._statsbomb_reader.read_events(match):
-            player_name = event.get(StatsBombOpenDataSource.PLAYER_FIELD, {}).get(
-                StatsBombOpenDataSource.NAME_FIELD
-            )
-            if not player_name:
-                continue
-            self._add_one_event(
-                counters.setdefault(player_name, self._start_a_counter_at_zero()), event
-            )
-            team_of_player[player_name] = event.get(
-                StatsBombOpenDataSource.TEAM_FIELD, {}
-            ).get(StatsBombOpenDataSource.NAME_FIELD)
-
-        home_team = match[StatsBombOpenDataSource.HOME_TEAM_FIELD][
-            StatsBombOpenDataSource.HOME_TEAM_NAME_FIELD
-        ]
-        away_team = match[StatsBombOpenDataSource.AWAY_TEAM_FIELD][
-            StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
-        ]
-        return [
-            self._build_the_row_of_one_player(
-                player_name,
-                counter,
-                team_of_player.get(player_name, ""),
-                home_team,
-                away_team,
-                self._statsbomb_reader.read_the_day_a_match_was_played(match),
-                competition,
-            )
-            for player_name, counter in counters.items()
-        ]
-
-    def _start_a_counter_at_zero(self) -> dict[str, float]:
-        """Build a counter that holds a zero for everything that is counted."""
-        return {
-            name: 0.0
-            for name in (
-                "passes",
-                "completed_passes",
-                "pressured_passes",
-                "completed_pressured_passes",
-                "carries",
-                "pressured_carries",
-                "take_ons",
-                "take_ons_won",
-                "times_dispossessed",
-                "miscontrols",
-            )
-        }
-
-    def _add_one_event(self, counter: dict[str, float], event: dict[str, Any]) -> None:
-        """Add one event, counting it once and under pressure where it applies."""
-        event_name = event.get(StatsBombOpenDataSource.TYPE_FIELD, {}).get(
-            StatsBombOpenDataSource.NAME_FIELD
+    def _build_the_rows_of_every_player(self) -> pd.DataFrame:
+        """Build one row per player who touched the ball in a match."""
+        events = self._prepared_tables.read_the_events()
+        of_a_named_player = events[events["player_name"] != ""]
+        counts = self._count_every_player(of_a_named_player)
+        of_named_matches = counts.merge(
+            self._prepared_tables.read_the_match_identities(), on="game_identifier"
         )
-        was_under_pressure = bool(
-            event.get(PressResistanceFeature.UNDER_PRESSURE_FIELD)
+        plays_at_home = (
+            of_named_matches["team_name"] == of_named_matches["home_team_name"]
         )
-        if event_name == MatchStyleFeature.PASS_EVENT_NAME:
-            self._add_one_pass(counter, event, was_under_pressure)
-        elif event_name == ExpectedThreatFeature.CARRY_EVENT_NAME:
-            counter["carries"] += 1
-            counter["pressured_carries"] += 1 if was_under_pressure else 0
-        elif event_name == MatchStyleFeature.DRIBBLE_EVENT_NAME:
-            counter["take_ons"] += 1
-            counter["take_ons_won"] += (
-                1 if self._has_got_past_the_opponent(event) else 0
-            )
-        elif event_name == PressResistanceFeature.DISPOSSESSED_EVENT_NAME:
-            counter["times_dispossessed"] += 1
-        elif event_name == PressResistanceFeature.MISCONTROL_EVENT_NAME:
-            counter["miscontrols"] += 1
-
-    def _add_one_pass(
-        self,
-        counter: dict[str, float],
-        event: dict[str, Any],
-        was_under_pressure: bool,
-    ) -> None:
-        """Add a pass, and again separately when it was played under pressure."""
-        was_completed = StatsBombOpenDataSource.OUTCOME_FIELD not in event.get(
-            StatsBombOpenDataSource.PASS_FIELD, {}
-        )
-        counter["passes"] += 1
-        counter["completed_passes"] += 1 if was_completed else 0
-        if not was_under_pressure:
-            return
-        counter["pressured_passes"] += 1
-        counter["completed_pressured_passes"] += 1 if was_completed else 0
-
-    def _has_got_past_the_opponent(self, event: dict[str, Any]) -> bool:
-        """Return True when the player got past their opponent."""
-        outcome = event.get(StatsBombOpenDataSource.DRIBBLE_FIELD, {}).get(
-            StatsBombOpenDataSource.OUTCOME_FIELD, {}
-        )
-        return (
-            outcome.get(StatsBombOpenDataSource.NAME_FIELD)
-            == MatchStyleFeature.COMPLETED_DRIBBLE_NAME
+        return pd.DataFrame(
+            {
+                EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.STATSBOMB_NAME,
+                "date": of_named_matches["match_date"],
+                "competition": of_named_matches["competition_name"],
+                "season": of_named_matches["season_name"],
+                "team": of_named_matches["team_name"],
+                "opponent": of_named_matches["away_team_name"].where(
+                    plays_at_home, of_named_matches["home_team_name"]
+                ),
+                "player": of_named_matches["player_name"],
+                **{
+                    name: of_named_matches[name].astype(int)
+                    for name in PressResistanceFeature.COUNTED_NAMES
+                },
+                "pressured_pass_completion": self._divided_or_left_empty(
+                    of_named_matches["completed_pressured_passes"],
+                    of_named_matches["pressured_passes"],
+                ),
+                "pressured_share": self._divided_or_left_empty(
+                    of_named_matches["pressured_passes"],
+                    of_named_matches["passes"],
+                ),
+            }
         )
 
-    def _build_the_row_of_one_player(
-        self,
-        player_name: str,
-        counter: dict[str, float],
-        team_name: str,
-        home_team: str,
-        away_team: str,
-        match_date: str,
-        competition: StatsBombCompetition,
-    ) -> dict[str, Any]:
-        """Turn the counter of one player into their row."""
-        return {
-            EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.STATSBOMB_NAME,
-            "date": match_date,
-            "competition": competition.competition_name,
-            "season": competition.season_name,
-            "team": team_name,
-            "opponent": away_team if team_name == home_team else home_team,
-            "player": player_name,
-            **{name: int(value) for name, value in counter.items()},
-            "pressured_pass_completion": self._divided_or_left_empty(
-                counter["completed_pressured_passes"], counter["pressured_passes"]
-            ),
-            "pressured_share": self._divided_or_left_empty(
-                counter["pressured_passes"], counter["passes"]
-            ),
-        }
+    def _count_every_player(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Add up what every player did in every match, under pressure and not.
 
-    def _divided_or_left_empty(self, part: float, whole: float) -> Any:
-        """Divide, or give an empty cell when there is nothing to divide by.
+        The team of a player is the one the last of their events names, the
+        way the walk this replaces kept overwriting it.
+        """
+        marked = self._marked_up(events)
+        counted = (
+            marked.groupby(self.PLAYER_KEYS, sort=False)[
+                list(PressResistanceFeature.COUNTED_NAMES)
+            ]
+            .sum()
+            .reset_index()
+        )
+        team_of_player = (
+            marked.groupby(self.PLAYER_KEYS, sort=False)["team_name"]
+            .last()
+            .reset_index()
+        )
+        return counted.merge(team_of_player, on=self.PLAYER_KEYS)
+
+    def _marked_up(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Say of every single event what it counts towards."""
+        event_name = events["event_name"]
+        is_a_pass = event_name == MatchStyleFeature.PASS_EVENT_NAME
+        is_a_carry = event_name == ExpectedThreatFeature.CARRY_EVENT_NAME
+        is_a_take_on = event_name == MatchStyleFeature.DRIBBLE_EVENT_NAME
+        was_under_pressure = events["was_under_pressure"]
+        was_completed = is_a_pass & events["was_a_completed_pass"]
+        return events.assign(
+            passes=is_a_pass,
+            completed_passes=was_completed,
+            pressured_passes=is_a_pass & was_under_pressure,
+            completed_pressured_passes=was_completed & was_under_pressure,
+            carries=is_a_carry,
+            pressured_carries=is_a_carry & was_under_pressure,
+            take_ons=is_a_take_on,
+            take_ons_won=is_a_take_on & events["was_a_completed_take_on"],
+            times_dispossessed=event_name
+            == PressResistanceFeature.DISPOSSESSED_EVENT_NAME,
+            miscontrols=event_name == PressResistanceFeature.MISCONTROL_EVENT_NAME,
+        )
+
+    def _divided_or_left_empty(self, part: pd.Series, whole: pd.Series) -> pd.Series:
+        """Divide a whole column, leaving a cell empty where nothing divides.
 
         Returns:
-            The rounded share, or an empty string. A zero would claim the
-            player failed under pressure when they were never put under any.
+            The rounded share per row, or an empty cell. A zero would claim
+            the player failed under pressure when they were never put under
+            any.
         """
-        if not whole:
-            return ""
-        return round(part / whole, PressResistanceFeature.RATE_DECIMAL_PLACES)
+        can_be_divided = whole != 0
+        quotient = part / whole.where(can_be_divided)
+        return (
+            DecimalRounder(PressResistanceFeature.RATE_DECIMAL_PLACES)
+            .round_every_value(quotient)
+            .where(can_be_divided, "")
+        )
 
 
 if __name__ == "__main__":
-    StatsBombPressResistanceBuilder(
-        StatsBombOpenDataReader(
-            WebFileDownloader(
-                user_agent=WebRequestSetting.RESEARCH_USER_AGENT,
-                polite_delay_in_seconds=(
-                    StatsBombOpenDataSource.POLITE_DELAY_IN_SECONDS
-                ),
-            )
-        )
-    ).build_every_competition()
+    StatsBombPressResistanceBuilder(PreparedStatsBombTables()).build_every_match()

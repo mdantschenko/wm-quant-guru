@@ -2,28 +2,22 @@
 
 Wyscout does not name the player who received a pass. The next action of the
 same team is taken instead, which is the usual way to read it: whoever plays
-the following action had the ball.
+the following action had the ball. In a table that next action is the row
+below, inside the same match, which is what a shift gives.
 """
 
-from typing import Any
+import pandas as pd
 
 from wmguru.helpers.constant import (
     EventSourceSetting,
     MatchStyleFeature,
     PassingLaneFeature,
 )
-from wmguru.helpers.data_class import (
-    MatchAction,
-    MatchIdentity,
-    WyscoutMatchFacts,
-    WyscoutNameLookups,
-)
 from wmguru.helpers.utils import (
     CsvFile,
     PassingLaneCounter,
+    PreparedWyscoutTables,
     SharedFeatureFile,
-    TextNormalizer,
-    WyscoutDataReader,
 )
 
 
@@ -32,10 +26,10 @@ class WyscoutPassingLaneBuilder:
 
     def __init__(
         self,
-        wyscout_data_reader: WyscoutDataReader,
+        prepared_tables: PreparedWyscoutTables,
         passing_lane_counter: PassingLaneCounter,
     ) -> None:
-        self._wyscout_data_reader = wyscout_data_reader
+        self._prepared_tables = prepared_tables
         self._passing_lane_counter = passing_lane_counter
         self._output_file = SharedFeatureFile(
             CsvFile(PassingLaneFeature.OUTPUT_FILE, PassingLaneFeature.COLUMN_NAMES),
@@ -44,92 +38,51 @@ class WyscoutPassingLaneBuilder:
         )
 
     def build_every_match(self) -> int:
-        """Walk the action file and write one row per pair of players.
+        """Group the prepared actions and write one row per pair of players.
 
         Returns:
             How many rows the file holds afterwards, the rows the StatsBomb
             half wrote included.
-        """
-        match_facts = self._wyscout_data_reader.read_match_facts()
-        lookups = self._wyscout_data_reader.read_name_lookups()
 
-        rows: list[dict[str, Any]] = []
-        for (
-            game_identifier,
-            actions,
-        ) in self._wyscout_data_reader.stream_actions_of_every_match(lookups):
-            facts = match_facts.get(game_identifier)
-            if facts is None:
-                continue
-            rows.extend(
-                self._passing_lane_counter.build_the_rows_of_every_lane(
-                    self._count_lanes_of_one_match(actions),
-                    self._which_match_this_row_belongs_to(facts, lookups),
-                    EventSourceSetting.WYSCOUT_NAME,
-                )
-            )
-        total_count = self._output_file.write_keeping_the_other_source(rows)
+        Raises:
+            SystemExit: When the actions have not been prepared yet.
+        """
+        actions = self._prepared_tables.read_the_actions_with_the_next_player()
+        identities = self._prepared_tables.read_the_match_identities()
+
+        lanes = self._passing_lane_counter.count_every_lane(
+            self._every_pass_that_arrived(actions)
+        )
+        rows = self._passing_lane_counter.build_the_rows_of_every_lane(
+            lanes, identities, EventSourceSetting.WYSCOUT_NAME
+        )
+        total_count = self._output_file.write_the_table_keeping_the_other_source(rows)
         print(f"  OK    {len(rows)} passing lanes from Wyscout, {total_count} in all")
         return total_count
 
-    def _count_lanes_of_one_match(
-        self, actions: list[MatchAction]
-    ) -> dict[tuple[str, str, str], dict[str, float]]:
-        """Count every completed pass of one match, per pair of players."""
-        lanes: dict[tuple[str, str, str], dict[str, float]] = {}
-        for index in range(len(actions) - 1):
-            action = actions[index]
-            receiver = actions[index + 1]
-            if not self._is_a_pass_that_arrived(action, receiver):
-                continue
-            self._passing_lane_counter.add_one_pass(
-                lanes,
-                action.team_name,
-                action.player_name,
-                receiver.player_name,
-                action.start_x_in_metres,
-                action.end_x_in_metres,
-            )
-        return lanes
-
-    def _is_a_pass_that_arrived(
-        self, action: MatchAction, next_action: MatchAction
-    ) -> bool:
-        """Return True when this action was a pass the next player took on.
+    def _every_pass_that_arrived(self, actions: pd.DataFrame) -> pd.DataFrame:
+        """Keep the passes the next player of the same team took on.
 
         A pass counts only when the next action belongs to the same team and
         to somebody else, otherwise the ball never left the passer or it went
         to the other side.
         """
-        return (
-            action.kind in MatchStyleFeature.EVERY_PASS_KIND
-            and action.was_successful
-            and next_action.team_name == action.team_name
-            and bool(next_action.player_name)
-            and next_action.player_name != action.player_name
+        arrived = (
+            actions["kind"].isin(MatchStyleFeature.EVERY_PASS_KIND)
+            & actions["was_successful"]
+            & (actions["team_of_the_next_action"] == actions["team_name"])
+            & (actions["player_of_the_next_action"] != "")
+            & (actions["player_of_the_next_action"] != actions["player_name"])
         )
-
-    def _which_match_this_row_belongs_to(
-        self, facts: WyscoutMatchFacts, lookups: WyscoutNameLookups
-    ) -> MatchIdentity:
-        """Say which match a row belongs to."""
-        return MatchIdentity(
-            game_identifier=facts.game_identifier,
-            competition_name=lookups.competition_names.get(
-                facts.competition_identifier, ""
-            ),
-            season_name=facts.season_name,
-            match_date=facts.match_date,
-            home_team_name=lookups.team_names.get(
-                facts.home_team_identifier, facts.home_team_identifier
-            ),
-            away_team_name=lookups.team_names.get(
-                facts.away_team_identifier, facts.away_team_identifier
-            ),
+        return actions[arrived].rename(
+            columns={
+                "player_name": "passer_name",
+                "player_of_the_next_action": "receiver_name",
+            }
         )
 
 
 if __name__ == "__main__":
     WyscoutPassingLaneBuilder(
-        WyscoutDataReader(TextNormalizer()), PassingLaneCounter()
+        PreparedWyscoutTables(), PassingLaneCounter()
     ).build_every_match()

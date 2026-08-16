@@ -10,6 +10,8 @@ This writes that table down once, together with the identity of every match.
 Run it again whenever the Wyscout source changes.
 """
 
+from pathlib import Path
+
 from wmguru.helpers.constant import PreparedTablePath
 from wmguru.helpers.utils import PreparedTableFile, TextNormalizer, WyscoutDataReader
 
@@ -29,15 +31,19 @@ class WyscoutActionTableBuilder:
         lookups = self._wyscout_data_reader.read_name_lookups()
 
         actions = self._wyscout_data_reader.read_every_action(lookups)
-        action_file = PreparedTableFile(PreparedTablePath.WYSCOUT_ACTION_FILE)
+        action_file = self._table(PreparedTablePath.WYSCOUT_ACTION_FILE)
         action_file.write(actions)
         print(f"  OK    {len(actions)} actions -> {action_file.path}")
 
         identities = self._wyscout_data_reader.read_the_identity_of_every_match(lookups)
-        identity_file = PreparedTableFile(PreparedTablePath.WYSCOUT_MATCH_IDENTITY_FILE)
+        identity_file = self._table(PreparedTablePath.WYSCOUT_MATCH_IDENTITY_FILE)
         identity_file.write(identities)
         print(f"  OK    {len(identities)} matches -> {identity_file.path}")
         return len(actions)
+
+    def _table(self, target_file: Path) -> PreparedTableFile:
+        """Name the file together with the command that writes it."""
+        return PreparedTableFile(target_file, PreparedTablePath.WYSCOUT_PREPARE_COMMAND)
 
 
 if __name__ == "__main__":

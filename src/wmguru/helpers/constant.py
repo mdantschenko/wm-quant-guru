@@ -648,6 +648,14 @@ class PreparedTablePath:
     Attributes:
         FILE_SUFFIX: Parquet rather than CSV, because it keeps the column
             types and reads back in a fraction of the time.
+        STATSBOMB_ACTION_FILE: The same fifteen columns the Wyscout action
+            table has, so one calculator serves both sources.
+        STATSBOMB_EVENT_FILE: One row per event rather than per action, for
+            the builders that need what the action shape throws away: the
+            card, the pressure mark, who received a pass, who came on.
+        STATSBOMB_LINE_UP_FILE: Who started and in which position. StatsBomb
+            writes a starting line up as one event holding eleven players, so
+            it cannot live in a table of one row per event.
     """
 
     FOLDER: Path = ProjectPath.DATA_ROOT / "Prepared Tables"
@@ -656,8 +664,61 @@ class PreparedTablePath:
     WYSCOUT_MATCH_IDENTITY_FILE: Path = FOLDER / (
         "wyscout_match_identities" + FILE_SUFFIX
     )
-    PREPARE_COMMAND: str = (
+    WYSCOUT_PREPARE_COMMAND: str = (
         "python -m wmguru.preprocessing.prepared_tables.wyscout_action_table_builder"
+    )
+    STATSBOMB_ACTION_FILE: Path = FOLDER / ("statsbomb_actions" + FILE_SUFFIX)
+    STATSBOMB_EVENT_FILE: Path = FOLDER / ("statsbomb_events" + FILE_SUFFIX)
+    STATSBOMB_MATCH_IDENTITY_FILE: Path = FOLDER / (
+        "statsbomb_match_identities" + FILE_SUFFIX
+    )
+    STATSBOMB_LINE_UP_FILE: Path = FOLDER / ("statsbomb_line_ups" + FILE_SUFFIX)
+    STATSBOMB_PREPARE_COMMAND: str = (
+        "python -m wmguru.preprocessing.prepared_tables.statsbomb_event_table_builder"
+    )
+
+
+class StatsBombPreparedTable:
+    """The columns of the two StatsBomb tables that hold more than actions.
+
+    The action table has the same fifteen columns on both sources, so it needs
+    no list of its own. These two exist only on the StatsBomb side, because
+    only StatsBomb says who received a pass, what the ball was under and who
+    came on for whom.
+
+    Attributes:
+        EVENT_COLUMN_NAMES: Named in full so a match without a single event of
+            some kind still writes the column, and the tables of all the
+            matches stack on top of each other.
+    """
+
+    EVENT_COLUMN_NAMES: tuple[str, ...] = (
+        "game_identifier",
+        "event_name",
+        "team_name",
+        "player_name",
+        "player_identifier",
+        "minute_in_match",
+        "was_under_pressure",
+        "card_name",
+        "start_x_in_metres",
+        "start_y_in_metres",
+        "end_x_in_metres",
+        "end_y_in_metres",
+        "pass_type_name",
+        "was_a_cross",
+        "was_a_completed_pass",
+        "receiver_name",
+        "was_a_completed_take_on",
+        "replacement_player_name",
+        "replacement_player_identifier",
+    )
+    LINE_UP_COLUMN_NAMES: tuple[str, ...] = (
+        "game_identifier",
+        "team_name",
+        "player_identifier",
+        "player_name",
+        "position_name",
     )
 
 
@@ -1627,6 +1688,14 @@ class WyscoutEventFile:
     }
     CARD_TAG_PREFIX: str = "170"
     NUMBER_PATTERN: str = r"\d+"
+    EXACT_NUMBER_PATTERN: str = r"(?<!\d){number}(?!\d)"
+    EVENT_COLUMNS_TO_READ: tuple[str, ...] = (
+        "matchId",
+        "teamId",
+        "playerId",
+        "eventName",
+        "tagsList",
+    )
 
 
 class StatsBombOpenDataSource:
@@ -2099,6 +2168,20 @@ class PassingNetworkFeature:
         "game_id",
         "is_home",
     )
+    SUMMARY_COLUMN_NAMES: tuple[str, ...] = (
+        "passes",
+        "pass_success_rate",
+        "forward_pass_share",
+        "mean_pass_length_in_metres",
+        "mean_forward_gain_in_metres",
+        "players_involved",
+        "distinct_lanes",
+        "unused_lane_share",
+        "pass_concentration",
+        "top_player_share",
+        "top_lane",
+        "top_lane_count",
+    )
 
     FORWARD_MINIMUM_METRES: float = PassingLaneFeature.FORWARD_MINIMUM_METRES
     RATE_DECIMAL_PLACES: int = 4
@@ -2328,6 +2411,19 @@ class PressResistanceFeature:
         "date",
         "team",
         "player",
+    )
+
+    COUNTED_NAMES: tuple[str, ...] = (
+        "passes",
+        "completed_passes",
+        "pressured_passes",
+        "completed_pressured_passes",
+        "carries",
+        "pressured_carries",
+        "take_ons",
+        "take_ons_won",
+        "times_dispossessed",
+        "miscontrols",
     )
 
     UNDER_PRESSURE_FIELD: str = "under_pressure"

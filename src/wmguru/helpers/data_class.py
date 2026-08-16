@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Annotated, Any
 
+import pandas as pd
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -45,6 +46,48 @@ class StatsBombCompetition:
     def finished_key(self) -> tuple[str, str]:
         """The pair a builder writes into its file to mark this season done."""
         return (self.competition_name, self.season_name)
+
+
+@dataclass(frozen=True)
+class PreparedStatsBombRows:
+    """The four tables one walk over the StatsBomb documents produces.
+
+    They come out of the same fetch and are written in the same moment, so
+    they travel as one thing rather than as four return values that a caller
+    could stack in the wrong order.
+    """
+
+    actions: pd.DataFrame
+    events: pd.DataFrame
+    identities: pd.DataFrame
+    line_ups: pd.DataFrame
+
+    def stacked_under(
+        self, prepared_before: "PreparedStatsBombRows"
+    ) -> "PreparedStatsBombRows":
+        """Put this season under everything an earlier run had prepared.
+
+        Returns:
+            All four tables of both, with the seasons in the order they were
+            written.
+        """
+        return PreparedStatsBombRows(
+            actions=self._stacked(prepared_before.actions, self.actions),
+            events=self._stacked(prepared_before.events, self.events),
+            identities=self._stacked(prepared_before.identities, self.identities),
+            line_ups=self._stacked(prepared_before.line_ups, self.line_ups),
+        )
+
+    def _stacked(self, before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
+        """Put one table under another, skipping an empty one.
+
+        An empty table carries no column types, and stacking one onto a full
+        table turns a whole column back into something untyped.
+        """
+        with_rows = [table for table in (before, after) if not table.empty]
+        if not with_rows:
+            return pd.DataFrame()
+        return pd.concat(with_rows, ignore_index=True)
 
 
 @dataclass(frozen=True)
@@ -86,22 +129,6 @@ class WyscoutMatchFacts:
 
 
 @dataclass(frozen=True)
-class MatchIdentity:
-    """Which match a row belongs to, in the words the output file uses.
-
-    Names, not identifiers. A builder has looked them up by the time it
-    builds a row, and both event sources end up with the same six values.
-    """
-
-    game_identifier: str
-    competition_name: str
-    season_name: str
-    match_date: str
-    home_team_name: str
-    away_team_name: str
-
-
-@dataclass(frozen=True)
 class MatchAction:
     """One action of one team, in the one shape both event sources are read into.
 
@@ -140,51 +167,6 @@ class MatchAction:
     def order_in_the_match(self) -> tuple[int, float]:
         """The key that puts the actions of a match into the order they happened."""
         return (self.period_number, self.second_in_period)
-
-
-@dataclass(frozen=True)
-class PlayerAppearance:
-    """That one player was on the pitch in one match, and for how long.
-
-    A player who never came on has no appearance at all, so a row is only
-    built for somebody who actually played.
-    """
-
-    player_name: str
-    team_identifier: str
-    minutes_played: int
-
-
-@dataclass(frozen=True)
-class TeamPass:
-    """One pass of one team, in the shape both event sources are read into.
-
-    Attributes:
-        receiver_name: Empty when the pass did not arrive, or when the source
-            does not say who got it.
-    """
-
-    passer_name: str
-    receiver_name: str
-    start_x_in_metres: float
-    start_y_in_metres: float
-    end_x_in_metres: float
-    end_y_in_metres: float
-    was_successful: bool
-
-    @property
-    def forward_gain_in_metres(self) -> float:
-        """How much ground the pass won towards the goal being attacked."""
-        return self.end_x_in_metres - self.start_x_in_metres
-
-    @property
-    def has_reached_somebody_else(self) -> bool:
-        """True when the pass arrived at a team mate, so it forms a lane."""
-        return (
-            self.was_successful
-            and bool(self.receiver_name)
-            and self.receiver_name != self.passer_name
-        )
 
 
 @dataclass(frozen=True)

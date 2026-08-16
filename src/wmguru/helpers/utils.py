@@ -5,30 +5,33 @@ place. Together with constant.py and data_class.py these are the three files
 that hold many small classes on purpose.
 
 The classes are sorted so that a class only ever uses one above it:
-   1. ExactNumberReader        read written numbers without losing the last bit
-   2. DecimalRounder           cut a column of numbers down to a few digits
-   3. TextNormalizer           compare two spellings of the same name
-   4. DateNormalizer           one date format out of the many sources use
-   5. ConfederationLookup      which confederation a national team is in
-   6. ApiKeyReader             get a key without putting it into the code
-   7. GeographyCalculator      distance and time zone between two places
-   8. CsvFile                  read and write a CSV file, resumable
-   9. SharedFeatureFile        one file that both event sources write into
-  10. MatchDisciplineCounter   fouls and cards, counted the same way by both
-  11. MatchStyleCalculator     the actions of a match to two style rows
-  12. PassingLaneCounter       the passes between two players of a team
-  13. PassingNetworkCalculator the passing network of a team, summarised
-  14. PlayerMatchMetricCalculator what one player did in one match
-  15. ExpectedThreatGrid       what a place on the pitch is worth
-  16. ExpectedThreatGridFile   that grid on disk, for both sources
-  17. PreMatchRollingAverage   the form of a team before its next match
-  18. ZipArchiveExtractor      unpack an archive that was downloaded
-  19. StadiumLocator           stadium name to city and coordinates
-  20. WebFileDownloader        fetch a file over HTTP
-  21. WikipediaPageReader      read the raw wikitext of a page
-  22. WyscoutDataReader        the lookup tables of the Wyscout dataset
-  23. StatsBombOpenDataReader  competitions, matches and events of StatsBomb
-  24. WorldCupTeamNameReader   the 48 team names of the 2026 World Cup
+   1. PreparedTableFile        one table the preprocessing step wrote, on disk
+   2. PreparedWyscoutTables    the two tables prepared out of the Wyscout files
+   3. PreparedStatsBombTables  the four tables prepared out of the StatsBomb data
+   4. ExactNumberReader        read written numbers without losing the last bit
+   5. DecimalRounder           cut a column of numbers down to a few digits
+   6. TextNormalizer           compare two spellings of the same name
+   7. DateNormalizer           one date format out of the many sources use
+   8. ConfederationLookup      which confederation a national team is in
+   9. ApiKeyReader             get a key without putting it into the code
+  10. GeographyCalculator      distance and time zone between two places
+  11. CsvFile                  read and write a CSV file, resumable
+  12. SharedFeatureFile        one file that both event sources write into
+  13. MatchDisciplineCounter   fouls and cards, counted the same way by both
+  14. MatchStyleCalculator     the actions of a match to two style rows
+  15. PassingLaneCounter       the passes between two players of a team
+  16. PassingNetworkCalculator the passing network of a team, summarised
+  17. PlayerMatchMetricCalculator what one player did in one match
+  18. ExpectedThreatGrid       what a place on the pitch is worth
+  19. ExpectedThreatGridFile   that grid on disk, for both sources
+  20. PreMatchRollingAverage   the form of a team before its next match
+  21. ZipArchiveExtractor      unpack an archive that was downloaded
+  22. StadiumLocator           stadium name to city and coordinates
+  23. WebFileDownloader        fetch a file over HTTP
+  24. WikipediaPageReader      read the raw wikitext of a page
+  25. WyscoutDataReader        the lookup tables of the Wyscout dataset
+  26. StatsBombOpenDataReader  competitions, matches and events of StatsBomb
+  27. WorldCupTeamNameReader   the 48 team names of the 2026 World Cup
 """
 
 import ast
@@ -69,7 +72,10 @@ from wmguru.helpers.constant import (
     PitchGeometry,
     PlayerMatchMetricFeature,
     PreparedTablePath,
+    PressResistanceFeature,
     StatsBombOpenDataSource,
+    StatsBombPreparedTable,
+    SubstitutionFeature,
     TimeStampFormat,
     WebRequestSetting,
     WikipediaSource,
@@ -78,10 +84,7 @@ from wmguru.helpers.constant import (
 )
 from wmguru.helpers.data_class import (
     MatchAction,
-    MatchIdentity,
-    PlayerAppearance,
     StatsBombCompetition,
-    TeamPass,
     WyscoutMatchFacts,
     WyscoutNameLookups,
 )
@@ -95,8 +98,17 @@ class PreparedTableFile:
     so a coordinate comes back as the very number that was written.
     """
 
-    def __init__(self, target_file: Path) -> None:
+    def __init__(self, target_file: Path, prepare_command: str) -> None:
+        """Keep the file and the command that writes it, named in the message.
+
+        Args:
+            target_file: Where the prepared table lies.
+            prepare_command: What a caller has to run when the table is
+                missing. Each source has its own, so the message cannot send
+                somebody to the wrong one.
+        """
         self._target_file = target_file
+        self._prepare_command = prepare_command
 
     @property
     def path(self) -> Path:
@@ -113,7 +125,7 @@ class PreparedTableFile:
         if not self._target_file.exists():
             raise SystemExit(
                 f"{self._target_file} is missing. Prepare it first:\n"
-                f"    {PreparedTablePath.PREPARE_COMMAND}"
+                f"    {self._prepare_command}"
             )
         return pd.read_parquet(self._target_file)
 
@@ -121,6 +133,163 @@ class PreparedTableFile:
         """Write the prepared table, so every builder can read it."""
         self._target_file.parent.mkdir(parents=True, exist_ok=True)
         table.to_parquet(self._target_file, index=False)
+
+
+class PreparedWyscoutTables:
+    """The two tables the Wyscout preprocessing step left behind.
+
+    A builder asks this for the table it groups over instead of naming a path
+    and the command that writes it, which every one of them would otherwise
+    have to repeat.
+    """
+
+    def read_the_actions(self) -> pd.DataFrame:
+        """Read every action of every match, in the order they were played."""
+        return self._table(PreparedTablePath.WYSCOUT_ACTION_FILE).read()
+
+    def read_the_match_identities(self) -> pd.DataFrame:
+        """Read one row per match, with the competition and both teams named."""
+        return self._table(PreparedTablePath.WYSCOUT_MATCH_IDENTITY_FILE).read()
+
+    def read_the_actions_with_the_next_player(self) -> pd.DataFrame:
+        """Read the actions, each carrying who played the action after it.
+
+        Wyscout names nobody as the receiver of a pass, so whoever plays the
+        following action is taken to have had the ball. In a table that next
+        action is the row below, inside the same match.
+
+        Returns:
+            The action table with the team and the player of the next action
+            added, both empty for the last action of a match.
+        """
+        actions = self.read_the_actions()
+        of_the_next_action = actions.groupby("game_identifier", sort=False)[
+            ["team_name", "player_name"]
+        ].shift(-1)
+        return actions.assign(
+            team_of_the_next_action=of_the_next_action["team_name"].fillna(""),
+            player_of_the_next_action=of_the_next_action["player_name"].fillna(""),
+        )
+
+    def _table(self, target_file: Path) -> PreparedTableFile:
+        """Name the file together with the command that writes it."""
+        return PreparedTableFile(target_file, PreparedTablePath.WYSCOUT_PREPARE_COMMAND)
+
+
+class PreparedStatsBombTables:
+    """The four tables the StatsBomb preprocessing step left behind.
+
+    The events are fetched over the network one match at a time, so preparing
+    them costs the better part of an hour. Every builder reads these instead,
+    and none of them touches the network at all.
+
+    A few readings of those tables are wanted by more than one builder, so
+    they stand here rather than in each of them: which team a match names as
+    home, and which events were a foul or carried a card.
+    """
+
+    def read_the_actions(self) -> pd.DataFrame:
+        """Read the actions, in the fifteen columns the Wyscout table has too."""
+        return self._table(PreparedTablePath.STATSBOMB_ACTION_FILE).read()
+
+    def read_the_events(self) -> pd.DataFrame:
+        """Read one row per event, with what the action shape throws away."""
+        return self._table(PreparedTablePath.STATSBOMB_EVENT_FILE).read()
+
+    def read_the_match_identities(self) -> pd.DataFrame:
+        """Read one row per match, the referee named alongside both teams."""
+        return self._table(PreparedTablePath.STATSBOMB_MATCH_IDENTITY_FILE).read()
+
+    def read_the_starting_line_ups(self) -> pd.DataFrame:
+        """Read one row per player who started, with the position they held."""
+        return self._table(PreparedTablePath.STATSBOMB_LINE_UP_FILE).read()
+
+    def read_the_sides_of_every_match(self) -> pd.DataFrame:
+        """Read the matches, with the two sides named the way an event names a team.
+
+        Returns:
+            The identity table with a home and an away team identifier added.
+            StatsBomb names a team rather than numbering it, so that name is
+            what a team is identified by.
+        """
+        identities = self.read_the_match_identities()
+        return identities.assign(
+            home_team_identifier=identities["home_team_name"],
+            away_team_identifier=identities["away_team_name"],
+        )
+
+    def read_every_card_and_foul(self) -> pd.DataFrame:
+        """Read the events that were a foul or carried a card, marked up.
+
+        Returns:
+            One row per such event, with a one or a zero under each counted
+            name and the player named beside their identifier. An event that
+            names no player is kept: a card of a whole bench belongs to no
+            player but still counts towards the team.
+        """
+        events = self.read_the_events()
+        is_a_foul = (
+            events["event_name"] == StatsBombOpenDataSource.FOUL_EVENT_NAME
+        ).astype(int)
+        cards = pd.DataFrame(
+            {
+                card_name: (events["card_name"] == card_name).astype(int)
+                for card_name in MatchDisciplineFeature.CARD_NAMES
+            }
+        )
+        marked = pd.DataFrame(
+            {
+                "game_identifier": events["game_identifier"],
+                "team_identifier": events["team_name"],
+                "player_identifier": events["player_identifier"],
+                "player_name": events["player_name"],
+                EventSourceSetting.FOUL_NAME: is_a_foul,
+                **cards,
+            }
+        )
+        counts_towards_anything = is_a_foul.astype(bool) | cards.any(axis="columns")
+        return marked[counts_towards_anything]
+
+    def name_every_counted_player(
+        self, per_player: pd.DataFrame, marked_events: pd.DataFrame, sides: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Put the match around every counted player, and their name beside it.
+
+        Args:
+            per_player: One row per player of a match, keyed by game, player
+                and team identifier, with whatever was counted alongside.
+            marked_events: The rows the counts came out of, which still carry
+                the name every player identifier belongs to.
+            sides: The matches, with both sides named.
+
+        Returns:
+            The counts with the columns of their match beside them and a
+            team_name, opponent_name and player_name added.
+        """
+        with_the_name = per_player.merge(
+            marked_events[["player_identifier", "player_name"]].drop_duplicates(
+                "player_identifier"
+            ),
+            on="player_identifier",
+            how="left",
+        )
+        of_named_matches = with_the_name.merge(sides, on="game_identifier")
+        plays_at_home = (
+            of_named_matches["team_identifier"]
+            == of_named_matches["home_team_identifier"]
+        )
+        return of_named_matches.assign(
+            team_name=of_named_matches["team_identifier"],
+            opponent_name=of_named_matches["away_team_name"].where(
+                plays_at_home, of_named_matches["home_team_name"]
+            ),
+        )
+
+    def _table(self, target_file: Path) -> PreparedTableFile:
+        """Name the file together with the command that writes it."""
+        return PreparedTableFile(
+            target_file, PreparedTablePath.STATSBOMB_PREPARE_COMMAND
+        )
 
 
 class ExactNumberReader:
@@ -983,39 +1152,92 @@ class MatchDisciplineCounter:
     Both event sources end up with the same numbers, so both count into the
     same shape and both add the two sides up the same way. Only where the
     fouls and cards are read differs, and that is each source's own business.
+
+    A marked table is what both sources hand over: one row per event that was
+    a foul or carried a card, with a one or a zero under each counted name,
+    keyed by game, team and player.
     """
 
-    def start_a_counter_at_zero(self) -> dict[str, int]:
-        """Build a counter holding a zero for fouls and every kind of card."""
-        return {name: 0 for name in MatchDisciplineFeature.COUNTED_NAMES}
+    PLAYER_KEYS = ["game_identifier", "player_identifier", "team_identifier"]
+    TEAM_KEYS = ["game_identifier", "team_identifier"]
 
-    def summarise_both_sides(
-        self, home_counter: dict[str, int], away_counter: dict[str, int]
-    ) -> dict[str, int]:
-        """Turn the two counters of a match into the columns of a match row.
+    def count_every_player(self, marked_events: pd.DataFrame) -> pd.DataFrame:
+        """Add the fouls and cards of every player of every match up.
 
         Returns:
-            The fouls and cards of both sides. A red counts a second yellow as
-            well, because both end with a player leaving the pitch.
+            One row per player who fouled or was carded, in the order they
+            first appear in the events. An event the source names no player
+            for counts towards no player at all.
         """
-        return {
-            "home_fouls": home_counter[EventSourceSetting.FOUL_NAME],
-            "away_fouls": away_counter[EventSourceSetting.FOUL_NAME],
-            "home_yellow": home_counter[EventSourceSetting.YELLOW_NAME],
-            "home_red": self._sendings_off_of(home_counter),
-            "away_yellow": away_counter[EventSourceSetting.YELLOW_NAME],
-            "away_red": self._sendings_off_of(away_counter),
-            "total_cards": sum(
-                home_counter[name] + away_counter[name]
-                for name in MatchDisciplineFeature.CARD_NAMES
-            ),
-        }
+        of_a_named_player = marked_events[marked_events["player_identifier"] != ""]
+        return self._added_up_over(of_a_named_player, self.PLAYER_KEYS)
 
-    def _sendings_off_of(self, counter: dict[str, int]) -> int:
+    def count_every_team(self, per_player: pd.DataFrame) -> pd.DataFrame:
+        """Add the players of a team up, so a match has two rows left."""
+        return self._added_up_over(per_player, self.TEAM_KEYS)
+
+    def _added_up_over(self, counts: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+        """Add every counted name up over the given keys, in first seen order."""
+        return (
+            counts.groupby(keys, sort=False)[list(MatchDisciplineFeature.COUNTED_NAMES)]
+            .sum()
+            .reset_index()
+        )
+
+    def summarise_both_sides(
+        self, per_team: pd.DataFrame, sides: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Fold the two teams of every match into the columns of one match row.
+
+        Args:
+            per_team: What every team of every match collected, one row each.
+            sides: One row per match, naming the team identifier of the home
+                and of the away side. Every one of its rows gets a row back,
+                a match in which nobody was carded included.
+
+        Returns:
+            The fouls and cards of both sides, indexed the way sides was. A
+            red counts a second yellow as well, because both end with a player
+            leaving the pitch.
+        """
+        of_the_home_team = self._counted_for_one_side(
+            sides, per_team, "home_team_identifier"
+        )
+        of_the_away_team = self._counted_for_one_side(
+            sides, per_team, "away_team_identifier"
+        )
+        cards = list(MatchDisciplineFeature.CARD_NAMES)
+        return pd.DataFrame(
+            {
+                "home_fouls": of_the_home_team[EventSourceSetting.FOUL_NAME],
+                "away_fouls": of_the_away_team[EventSourceSetting.FOUL_NAME],
+                "home_yellow": of_the_home_team[EventSourceSetting.YELLOW_NAME],
+                "home_red": self._sendings_off_of(of_the_home_team),
+                "away_yellow": of_the_away_team[EventSourceSetting.YELLOW_NAME],
+                "away_red": self._sendings_off_of(of_the_away_team),
+                "total_cards": of_the_home_team[cards].sum(axis="columns")
+                + of_the_away_team[cards].sum(axis="columns"),
+            }
+        )
+
+    def _counted_for_one_side(
+        self, sides: pd.DataFrame, per_team: pd.DataFrame, side_column: str
+    ) -> pd.DataFrame:
+        """Look one side of every match up, with a zero where it collected none."""
+        looked_up = sides.merge(
+            per_team,
+            left_on=["game_identifier", side_column],
+            right_on=self.TEAM_KEYS,
+            how="left",
+        )
+        counted = list(MatchDisciplineFeature.COUNTED_NAMES)
+        return looked_up[counted].fillna(0).astype(int).set_axis(sides.index)
+
+    def _sendings_off_of(self, of_one_side: pd.DataFrame) -> pd.Series:
         """Count how many players of one side had to leave the pitch."""
         return (
-            counter[EventSourceSetting.RED_NAME]
-            + counter[EventSourceSetting.SECOND_YELLOW_NAME]
+            of_one_side[EventSourceSetting.RED_NAME]
+            + of_one_side[EventSourceSetting.SECOND_YELLOW_NAME]
         )
 
 
@@ -1393,254 +1615,300 @@ class PassingLaneCounter:
     """The passes between two players, counted and turned into rows.
 
     Both event sources produce the same edge of the same network, they only
-    find the receiver differently, so the counting stands here once.
+    find the receiver differently, so the counting stands here once. What each
+    of them hands over is a table of the completed passes of every match, with
+    the passer, the receiver and where the pass ran from and to.
     """
 
-    def add_one_pass(
-        self,
-        lanes: dict[tuple[str, str, str], dict[str, float]],
-        team_name: str,
-        passer_name: str,
-        receiver_name: str,
-        start_x_in_metres: float,
-        end_x_in_metres: float,
-    ) -> None:
-        """Add one completed pass to the lane between two players."""
-        lane = lanes.setdefault(
-            (team_name, passer_name, receiver_name),
-            {
-                "passes": 0.0,
-                "forward_passes": 0.0,
-                "start_x_sum": 0.0,
-                "end_x_sum": 0.0,
-            },
+    LANE_KEYS = ["game_identifier", "team_name", "passer_name", "receiver_name"]
+
+    def count_every_lane(self, completed_passes: pd.DataFrame) -> pd.DataFrame:
+        """Add the passes between each pair of players of a match up.
+
+        Returns:
+            One row per lane, in the order the lanes were first played, with
+            the two sums the means are worked out of still in it.
+        """
+        went_forward = (
+            completed_passes["end_x_in_metres"] - completed_passes["start_x_in_metres"]
+        ) > PassingLaneFeature.FORWARD_MINIMUM_METRES
+        return (
+            completed_passes.assign(went_forward=went_forward)
+            .groupby(self.LANE_KEYS, sort=False)
+            .agg(
+                passes=("went_forward", "size"),
+                forward_passes=("went_forward", "sum"),
+                start_x_sum=("start_x_in_metres", "sum"),
+                end_x_sum=("end_x_in_metres", "sum"),
+            )
+            .reset_index()
         )
-        lane["passes"] += 1
-        if (
-            end_x_in_metres - start_x_in_metres
-            > PassingLaneFeature.FORWARD_MINIMUM_METRES
-        ):
-            lane["forward_passes"] += 1
-        lane["start_x_sum"] += start_x_in_metres
-        lane["end_x_sum"] += end_x_in_metres
 
     def build_the_rows_of_every_lane(
         self,
-        lanes: dict[tuple[str, str, str], dict[str, float]],
-        identity: MatchIdentity,
+        lanes: pd.DataFrame,
+        identities: pd.DataFrame,
         source_name: str,
-    ) -> list[dict[str, Any]]:
-        """Turn the lanes of one match into one row per pair of players."""
-        places = PassingLaneFeature.MEAN_DECIMAL_PLACES
-        return [
+    ) -> pd.DataFrame:
+        """Turn the counted lanes into one row per pair of players.
+
+        Args:
+            lanes: What every pair of players played, already counted.
+            identities: One row per match, which says which competition,
+                season and day a lane belongs to.
+            source_name: Which of the two event sources these lanes came out
+                of, written into the source column.
+        """
+        rounder = DecimalRounder(PassingLaneFeature.MEAN_DECIMAL_PLACES)
+        of_named_matches = lanes.merge(identities, on="game_identifier")
+        return pd.DataFrame(
             {
                 EventSourceSetting.SOURCE_COLUMN: source_name,
-                "game_id": identity.game_identifier,
-                "competition": identity.competition_name,
-                "season": identity.season_name,
-                "date": identity.match_date,
-                "team": team_name,
-                "passer": passer_name,
-                "receiver": receiver_name,
-                "passes": int(lane["passes"]),
-                "forward_passes": int(lane["forward_passes"]),
-                "mean_start_x": round(lane["start_x_sum"] / lane["passes"], places),
-                "mean_end_x": round(lane["end_x_sum"] / lane["passes"], places),
+                "game_id": of_named_matches["game_identifier"],
+                "competition": of_named_matches["competition_name"],
+                "season": of_named_matches["season_name"],
+                "date": of_named_matches["match_date"],
+                "team": of_named_matches["team_name"],
+                "passer": of_named_matches["passer_name"],
+                "receiver": of_named_matches["receiver_name"],
+                "passes": of_named_matches["passes"],
+                "forward_passes": of_named_matches["forward_passes"],
+                "mean_start_x": rounder.round_every_value(
+                    of_named_matches["start_x_sum"] / of_named_matches["passes"]
+                ),
+                "mean_end_x": rounder.round_every_value(
+                    of_named_matches["end_x_sum"] / of_named_matches["passes"]
+                ),
             }
-            for (team_name, passer_name, receiver_name), lane in lanes.items()
-        ]
+        )
 
 
 class PassingNetworkCalculator:
-    """The passing network of one team in one match, summarised."""
+    """The passing network of every team and match, summarised as one row each.
 
-    def summarise(self, passes: list[TeamPass]) -> dict[str, Any]:
-        """Turn the passes of one team into the columns of its row.
+    Both event sources hand the same table over: every open play pass of every
+    match, with the passer, the receiver and where the pass ran from and to.
+    A team that played no pass at all gets no row.
+    """
 
-        Args:
-            passes: Every open play pass of the team, in any order. Must not
-                be empty, a team without a pass gets no row at all.
+    TEAM_KEYS = ["game_identifier", "team_name"]
+
+    def summarise_every_team(self, passes: pd.DataFrame) -> pd.DataFrame:
+        """Turn the passes of every team of every match into its row.
 
         Returns:
-            The whole row apart from the columns that say which match it was.
+            One row per team that played a pass, without the columns that say
+            which match it was.
         """
-        passes_per_player = self._count_per_player(passes)
-        lanes = self._count_per_lane(passes)
-        pass_count = len(passes)
+        marked = self._marked_up(passes)
+        of_the_team = marked.groupby(self.TEAM_KEYS, sort=False)
+        pass_count = of_the_team.size()
+        per_player = self._count_per_player(marked)
+        lanes = self._count_per_lane(marked)
+        player_count = per_player.groupby(self.TEAM_KEYS, sort=False).size()
+        lane_count = self._lane_count_of_every_team(lanes, pass_count.index)
         rate_places = PassingNetworkFeature.RATE_DECIMAL_PLACES
-        top_lane, top_lane_count = self._busiest_lane(lanes)
-        return {
-            "passes": pass_count,
-            "pass_success_rate": round(
-                sum(1 for one in passes if one.was_successful) / pass_count,
-                rate_places,
-            ),
-            "forward_pass_share": round(
-                sum(1 for one in passes if self._was_forward(one)) / pass_count,
-                rate_places,
-            ),
-            "mean_pass_length_in_metres": round(
-                sum(self._how_far_the_ball_travelled(one) for one in passes)
-                / pass_count,
-                PassingNetworkFeature.LENGTH_DECIMAL_PLACES,
-            ),
-            "mean_forward_gain_in_metres": round(
-                sum(one.forward_gain_in_metres for one in passes) / pass_count,
-                PassingNetworkFeature.LENGTH_DECIMAL_PLACES,
-            ),
-            "players_involved": len(passes_per_player),
-            "distinct_lanes": len(lanes),
-            "unused_lane_share": self._unused_lane_share(
-                len(passes_per_player), len(lanes)
-            ),
-            "pass_concentration": round(
-                self._how_much_went_through_few_players(passes_per_player, pass_count),
-                rate_places,
-            ),
-            "top_player_share": round(
-                max(passes_per_player.values()) / pass_count, rate_places
-            ),
-            "top_lane": top_lane,
-            "top_lane_count": top_lane_count,
-        }
+        length_places = PassingNetworkFeature.LENGTH_DECIMAL_PLACES
+        rounded_rate = DecimalRounder(rate_places)
+        return pd.DataFrame(
+            {
+                "passes": pass_count,
+                "pass_success_rate": rounded_rate.round_every_value(
+                    of_the_team["was_successful"].sum() / pass_count
+                ),
+                "forward_pass_share": rounded_rate.round_every_value(
+                    of_the_team["went_forward"].sum() / pass_count
+                ),
+                "mean_pass_length_in_metres": DecimalRounder(
+                    length_places
+                ).round_every_value(
+                    of_the_team["how_far_the_ball_travelled"].sum() / pass_count
+                ),
+                "mean_forward_gain_in_metres": DecimalRounder(
+                    length_places
+                ).round_every_value(
+                    of_the_team["forward_gain_in_metres"].sum() / pass_count
+                ),
+                "players_involved": player_count,
+                "distinct_lanes": lane_count,
+                "unused_lane_share": self._unused_lane_share(
+                    player_count, lane_count, rounded_rate
+                ),
+                "pass_concentration": rounded_rate.round_every_value(
+                    self._how_much_went_through_few_players(per_player, pass_count)
+                ),
+                "top_player_share": rounded_rate.round_every_value(
+                    per_player.groupby(self.TEAM_KEYS, sort=False)["passes"].max()
+                    / pass_count
+                ),
+                **self._busiest_lane_of_every_team(lanes, pass_count.index),
+            }
+        ).reset_index()
 
-    def _count_per_player(self, passes: list[TeamPass]) -> dict[str, int]:
-        """Count how many passes each player of the team played."""
-        passes_per_player: dict[str, int] = {}
-        for one_pass in passes:
-            passes_per_player[one_pass.passer_name] = (
-                passes_per_player.get(one_pass.passer_name, 0) + 1
-            )
-        return passes_per_player
+    def _marked_up(self, passes: pd.DataFrame) -> pd.DataFrame:
+        """Say of every single pass how far it went and whether it formed a lane."""
+        forward_gain = passes["end_x_in_metres"] - passes["start_x_in_metres"]
+        return passes.assign(
+            forward_gain_in_metres=forward_gain,
+            went_forward=forward_gain > PassingNetworkFeature.FORWARD_MINIMUM_METRES,
+            how_far_the_ball_travelled=np.hypot(
+                forward_gain, passes["end_y_in_metres"] - passes["start_y_in_metres"]
+            ),
+            has_reached_somebody_else=passes["was_successful"]
+            & (passes["receiver_name"] != "")
+            & (passes["receiver_name"] != passes["passer_name"]),
+        )
 
-    def _count_per_lane(self, passes: list[TeamPass]) -> dict[tuple[str, str], int]:
-        """Count how often the ball went from one player to another."""
-        lanes: dict[tuple[str, str], int] = {}
-        for one_pass in passes:
-            if not one_pass.has_reached_somebody_else:
-                continue
-            lane = (one_pass.passer_name, one_pass.receiver_name)
-            lanes[lane] = lanes.get(lane, 0) + 1
-        return lanes
-
-    def _was_forward(self, one_pass: TeamPass) -> bool:
-        """Return True when a pass won enough ground to be called forward."""
+    def _count_per_player(self, marked: pd.DataFrame) -> pd.DataFrame:
+        """Count how many passes each player of each team played."""
         return (
-            one_pass.forward_gain_in_metres
-            > PassingNetworkFeature.FORWARD_MINIMUM_METRES
+            marked.groupby([*self.TEAM_KEYS, "passer_name"], sort=False)
+            .size()
+            .reset_index(name="passes")
         )
 
-    def _how_far_the_ball_travelled(self, one_pass: TeamPass) -> float:
-        """How far the ball travelled, across the pitch as well as up it."""
-        return math.hypot(
-            one_pass.forward_gain_in_metres,
-            one_pass.end_y_in_metres - one_pass.start_y_in_metres,
+    def _count_per_lane(self, marked: pd.DataFrame) -> pd.DataFrame:
+        """Count how often the ball went from one player to another.
+
+        Returns:
+            One row per lane, in the order the lanes were first played, so the
+            busiest of them is decided the way a walk decided it.
+        """
+        return (
+            marked[marked["has_reached_somebody_else"]]
+            .groupby([*self.TEAM_KEYS, "passer_name", "receiver_name"], sort=False)
+            .size()
+            .reset_index(name="passes")
         )
 
-    def _unused_lane_share(self, player_count: int, lane_count: int) -> Any:
+    def _lane_count_of_every_team(
+        self, lanes: pd.DataFrame, every_team: pd.Index
+    ) -> pd.Series:
+        """Count the distinct lanes of every team, zero where it formed none."""
+        return (
+            lanes.groupby(self.TEAM_KEYS, sort=False)
+            .size()
+            .reindex(every_team)
+            .fillna(0)
+            .astype(int)
+        )
+
+    def _unused_lane_share(
+        self, player_count: pd.Series, lane_count: pd.Series, rounder: DecimalRounder
+    ) -> pd.Series:
         """How many of the possible connections between players never happened.
 
         Returns:
-            The share, or an empty cell when a single player played every
-            pass, because then there is no connection to miss.
+            The share per team, or an empty cell where a single player played
+            every pass, because then there is no connection to miss.
         """
         possible_lanes = player_count * (player_count - 1)
-        if not possible_lanes:
-            return ""
-        return round(
-            max(0.0, 1.0 - lane_count / possible_lanes),
-            PassingNetworkFeature.RATE_DECIMAL_PLACES,
+        can_be_divided = possible_lanes != 0
+        share = 1.0 - lane_count / possible_lanes.where(can_be_divided)
+        return rounder.round_every_value(share.clip(lower=0.0)).where(
+            can_be_divided, ""
         )
 
     def _how_much_went_through_few_players(
-        self, passes_per_player: dict[str, int], pass_count: int
-    ) -> float:
+        self, per_player: pd.DataFrame, pass_count: pd.Series
+    ) -> pd.Series:
         """How much of the passing went through few players.
 
         The squared shares added up, the Herfindahl-Hirschman index. One
         player playing everything gives 1, eleven equal players give 1/11.
         """
-        return sum((count / pass_count) ** 2 for count in passes_per_player.values())
+        beside_the_team = per_player.join(
+            pass_count.rename("of_the_whole_team"), on=self.TEAM_KEYS
+        )
+        share = beside_the_team["passes"] / beside_the_team["of_the_whole_team"]
+        return (
+            (share**2)
+            .groupby([per_player[name] for name in self.TEAM_KEYS], sort=False)
+            .sum()
+            .reindex(pass_count.index)
+        )
 
-    def _busiest_lane(self, lanes: dict[tuple[str, str], int]) -> tuple[str, Any]:
+    def _busiest_lane_of_every_team(
+        self, lanes: pd.DataFrame, every_team: pd.Index
+    ) -> dict[str, pd.Series]:
         """Name the connection the ball took most often, and how often.
 
         Returns:
-            The two players and the count, or an empty name and a zero when
-            no pass of the team ever reached a team mate.
+            The two players and the count per team, an empty name and a zero
+            where no pass of the team ever reached a team mate.
         """
-        if not lanes:
-            return "", 0
-        (passer_name, receiver_name), count = max(
-            lanes.items(), key=lambda lane: lane[1]
+        busiest = lanes.loc[
+            lanes.groupby(self.TEAM_KEYS, sort=False)["passes"].idxmax()
+        ].set_index(self.TEAM_KEYS)
+        named = (
+            busiest["passer_name"]
+            + PassingNetworkFeature.LANE_SEPARATOR
+            + busiest["receiver_name"]
         )
-        return (
-            f"{passer_name}{PassingNetworkFeature.LANE_SEPARATOR}{receiver_name}",
-            count,
-        )
+        return {
+            "top_lane": named.reindex(every_team).fillna(""),
+            "top_lane_count": busiest["passes"]
+            .reindex(every_team)
+            .fillna(0)
+            .astype(int),
+        }
 
 
 class PlayerMatchMetricCalculator:
     """What one player did in one match, counted and built into their row.
 
     Both event sources are read into the same actions first, so what counts
-    as a progressive pass or a high recovery is decided here once.
+    as a progressive pass or a high recovery is decided here once. What each
+    of them hands over is the action table with an is_goalkeeper column saying
+    whether the player who made an action keeps goal.
     """
 
-    def start_a_counter_at_zero(self) -> dict[str, float]:
-        """Build a counter that holds a zero for everything that is counted."""
-        return {
-            name: 0.0
-            for name in (
-                "passes",
-                "completed_passes",
-                "progressive_passes",
-                "passes_into_box",
-                "deep_completions",
-                "progression_value",
-                "defensive_actions",
-                "defensive_height_sum",
-                "high_ball_recoveries",
-                "take_ons",
-                "take_ons_won",
-                "shots",
-                "shots_in_box",
-                "goalkeeper_actions",
-                "goalkeeper_actions_outside_box",
-                "goalkeeper_height_sum",
-                "goalkeeper_passes",
-                "goalkeeper_long_passes",
-            )
-        }
+    PLAYER_KEYS = ["player_identifier", "game_identifier"]
+    COUNTED_NAMES = (
+        "passes",
+        "completed_passes",
+        "progressive_passes",
+        "passes_into_box",
+        "deep_completions",
+        "progression_value",
+        "defensive_actions",
+        "defensive_height_sum",
+        "high_ball_recoveries",
+        "take_ons",
+        "take_ons_won",
+        "shots",
+        "shots_in_box",
+        "goalkeeper_actions",
+        "goalkeeper_actions_outside_box",
+        "goalkeeper_height_sum",
+        "goalkeeper_passes",
+        "goalkeeper_long_passes",
+    )
 
-    def add_one_action(
-        self, counter: dict[str, float], action: MatchAction, is_goalkeeper: bool
-    ) -> None:
-        """Add one action of one player to their counter."""
-        if is_goalkeeper:
-            self._add_a_goalkeeper_action(counter, action)
-        if action.kind in MatchStyleFeature.EVERY_PASS_KIND:
-            self._add_one_pass(counter, action, is_goalkeeper)
-        if action.kind in MatchStyleFeature.DEFENSIVE_LINE_KINDS:
-            counter["defensive_actions"] += 1
-            counter["defensive_height_sum"] += action.start_x_in_metres
-            if (
-                action.start_x_in_metres
-                >= PlayerMatchMetricFeature.HIGH_RECOVERY_START_X
-            ):
-                counter["high_ball_recoveries"] += 1
-        if action.kind == MatchStyleFeature.TAKE_ON_KIND:
-            counter["take_ons"] += 1
-            counter["take_ons_won"] += 1 if action.was_successful else 0
-        if action.kind in MatchStyleFeature.SHOT_KINDS:
-            counter["shots"] += 1
-            if self._is_in_the_box(action.start_x_in_metres, action.start_y_in_metres):
-                counter["shots_in_box"] += 1
+    def count_every_player(self, actions: pd.DataFrame) -> pd.DataFrame:
+        """Add up what every player did in every match they touched the ball in.
 
-    def build_the_columns_of_one_player(
-        self, counter: dict[str, float], is_goalkeeper: bool
-    ) -> dict[str, Any]:
-        """Turn the counter of one player into the columns of their row.
+        Returns:
+            One row per player and match, with the two height sums the means
+            are worked out of still in it. An action the source left to
+            nobody counts towards nothing.
+        """
+        of_a_named_player = actions[actions["player_identifier"] != ""]
+        marked = self._marked_up(of_a_named_player)
+        return (
+            marked.groupby(self.PLAYER_KEYS, sort=False)[list(self.COUNTED_NAMES)]
+            .sum()
+            .reset_index()
+        )
+
+    def build_the_columns_of_every_player(
+        self, counts: pd.DataFrame, is_goalkeeper: pd.Series
+    ) -> dict[str, pd.Series]:
+        """Turn the counts of every player into the columns of their row.
+
+        Args:
+            counts: One row per row of the output, already lined up with it.
+            is_goalkeeper: Whether each of those rows belongs to a keeper.
 
         Returns:
             Everything but the columns that say who the player is and which
@@ -1648,122 +1916,139 @@ class PlayerMatchMetricCalculator:
             player rather than holding a zero, because a zero would read as
             a keeper who did nothing.
         """
+        as_a_whole_number = {
+            name: counts[name].astype(int)
+            for name in (
+                "passes",
+                "completed_passes",
+                "progressive_passes",
+                "passes_into_box",
+                "deep_completions",
+                "defensive_actions",
+                "high_ball_recoveries",
+                "take_ons",
+                "take_ons_won",
+                "shots",
+                "shots_in_box",
+            )
+        }
         return {
-            "passes": int(counter["passes"]),
-            "completed_passes": int(counter["completed_passes"]),
-            "progressive_passes": int(counter["progressive_passes"]),
-            "passes_into_box": int(counter["passes_into_box"]),
-            "deep_completions": int(counter["deep_completions"]),
-            "progression_value": round(
-                counter["progression_value"],
-                PlayerMatchMetricFeature.PROGRESSION_DECIMAL_PLACES,
-            ),
-            "defensive_actions": int(counter["defensive_actions"]),
+            **as_a_whole_number,
+            "progression_value": DecimalRounder(
+                PlayerMatchMetricFeature.PROGRESSION_DECIMAL_PLACES
+            ).round_every_value(counts["progression_value"]),
             "defensive_action_height_in_metres": self._how_far_up_the_pitch_on_average(
-                counter["defensive_height_sum"], counter["defensive_actions"]
+                counts["defensive_height_sum"], counts["defensive_actions"]
             ),
-            "high_ball_recoveries": int(counter["high_ball_recoveries"]),
-            "take_ons": int(counter["take_ons"]),
-            "take_ons_won": int(counter["take_ons_won"]),
-            "shots": int(counter["shots"]),
-            "shots_in_box": int(counter["shots_in_box"]),
-            **self._goalkeeper_columns(counter, is_goalkeeper),
+            **self._goalkeeper_columns(counts, is_goalkeeper),
         }
 
-    def _add_a_goalkeeper_action(
-        self, counter: dict[str, float], action: MatchAction
-    ) -> None:
-        """Add an action of a keeper, and note how far out they played it."""
-        counter["goalkeeper_actions"] += 1
-        counter["goalkeeper_height_sum"] += action.start_x_in_metres
-        if (
-            action.start_x_in_metres
-            > PlayerMatchMetricFeature.PENALTY_AREA_LENGTH_IN_METRES
-        ):
-            counter["goalkeeper_actions_outside_box"] += 1
+    def _marked_up(self, actions: pd.DataFrame) -> pd.DataFrame:
+        """Say of every single action what it counts towards.
 
-    def _add_one_pass(
-        self, counter: dict[str, float], action: MatchAction, is_goalkeeper: bool
-    ) -> None:
-        """Add a pass, and what it was worth when it arrived."""
-        counter["passes"] += 1
-        gained = action.end_x_in_metres - action.start_x_in_metres
-        if is_goalkeeper:
-            counter["goalkeeper_passes"] += 1
-            if gained > PlayerMatchMetricFeature.LONG_PASS_MINIMUM_METRES:
-                counter["goalkeeper_long_passes"] += 1
-        if not action.was_successful:
-            return
-        counter["completed_passes"] += 1
-        counter["progression_value"] += self._progression_value_of(action)
-        if (
-            gained >= PlayerMatchMetricFeature.PROGRESSIVE_PASS_MINIMUM_METRES
-            and action.end_x_in_metres >= MatchStyleFeature.FINAL_THIRD_START_X
-        ):
-            counter["progressive_passes"] += 1
-        if self._is_in_the_box(action.end_x_in_metres, action.end_y_in_metres):
-            counter["passes_into_box"] += 1
-        if action.end_x_in_metres >= PlayerMatchMetricFeature.DEEP_COMPLETION_START_X:
-            counter["deep_completions"] += 1
+        Every column here answers one question about one action, so all the
+        counting afterwards is a sum over each of them.
+        """
+        kind = actions["kind"]
+        start_x = actions["start_x_in_metres"]
+        end_x = actions["end_x_in_metres"]
+        gained = end_x - start_x
+        is_goalkeeper = actions["is_goalkeeper"]
+        is_a_pass = kind.isin(MatchStyleFeature.EVERY_PASS_KIND)
+        was_completed = is_a_pass & actions["was_successful"]
+        is_on_the_defensive_line = kind.isin(MatchStyleFeature.DEFENSIVE_LINE_KINDS)
+        is_a_take_on = kind == MatchStyleFeature.TAKE_ON_KIND
+        is_a_shot = kind.isin(MatchStyleFeature.SHOT_KINDS)
+        return actions.assign(
+            passes=is_a_pass,
+            completed_passes=was_completed,
+            progressive_passes=was_completed
+            & (gained >= PlayerMatchMetricFeature.PROGRESSIVE_PASS_MINIMUM_METRES)
+            & (end_x >= MatchStyleFeature.FINAL_THIRD_START_X),
+            passes_into_box=was_completed
+            & self._lies_in_the_box(end_x, actions["end_y_in_metres"]),
+            deep_completions=was_completed
+            & (end_x >= PlayerMatchMetricFeature.DEEP_COMPLETION_START_X),
+            progression_value=self._progression_value_of(gained, end_x).where(
+                was_completed, 0.0
+            ),
+            defensive_actions=is_on_the_defensive_line,
+            defensive_height_sum=start_x.where(is_on_the_defensive_line, 0.0),
+            high_ball_recoveries=is_on_the_defensive_line
+            & (start_x >= PlayerMatchMetricFeature.HIGH_RECOVERY_START_X),
+            take_ons=is_a_take_on,
+            take_ons_won=is_a_take_on & actions["was_successful"],
+            shots=is_a_shot,
+            shots_in_box=is_a_shot
+            & self._lies_in_the_box(start_x, actions["start_y_in_metres"]),
+            goalkeeper_actions=is_goalkeeper,
+            goalkeeper_actions_outside_box=is_goalkeeper
+            & (start_x > PlayerMatchMetricFeature.PENALTY_AREA_LENGTH_IN_METRES),
+            goalkeeper_height_sum=start_x.where(is_goalkeeper, 0.0),
+            goalkeeper_passes=is_goalkeeper & is_a_pass,
+            goalkeeper_long_passes=is_goalkeeper
+            & is_a_pass
+            & (gained > PlayerMatchMetricFeature.LONG_PASS_MINIMUM_METRES),
+        )
 
-    def _progression_value_of(self, action: MatchAction) -> float:
+    def _progression_value_of(self, gained: pd.Series, end_x: pd.Series) -> pd.Series:
         """Weigh the ground a pass won by how near the goal it ended.
 
         Ten metres won in front of the other box are worth more than ten
         metres won in front of your own, so the gain is multiplied by the
         square of how far up the pitch the ball came to rest.
         """
-        gained = max(0.0, action.end_x_in_metres - action.start_x_in_metres)
-        share_of_the_pitch = action.end_x_in_metres / PitchGeometry.LENGTH_IN_METRES
-        return gained * share_of_the_pitch**2
+        share_of_the_pitch = end_x / PitchGeometry.LENGTH_IN_METRES
+        return gained.clip(lower=0.0) * share_of_the_pitch**2
 
-    def _is_in_the_box(self, x_in_metres: float, y_in_metres: float) -> bool:
-        """Return True when a point lies inside the penalty area being attacked."""
+    def _lies_in_the_box(
+        self, x_in_metres: pd.Series, y_in_metres: pd.Series
+    ) -> pd.Series:
+        """Return True where a point lies inside the penalty area being attacked."""
         return (
-            x_in_metres >= MatchStyleFeature.BOX_START_X
-            and MatchStyleFeature.BOX_MINIMUM_Y
-            <= y_in_metres
-            <= MatchStyleFeature.BOX_MAXIMUM_Y
+            (x_in_metres >= MatchStyleFeature.BOX_START_X)
+            & (y_in_metres >= MatchStyleFeature.BOX_MINIMUM_Y)
+            & (y_in_metres <= MatchStyleFeature.BOX_MAXIMUM_Y)
         )
 
     def _goalkeeper_columns(
-        self, counter: dict[str, float], is_goalkeeper: bool
-    ) -> dict[str, Any]:
-        """Build the five keeper columns, or leave them empty for anybody else."""
-        if not is_goalkeeper:
-            return {
-                "goalkeeper_actions": "",
-                "goalkeeper_actions_outside_box": "",
-                "goalkeeper_action_height_in_metres": "",
-                "goalkeeper_long_passes": "",
-                "goalkeeper_passes": "",
-            }
+        self, counts: pd.DataFrame, is_goalkeeper: pd.Series
+    ) -> dict[str, pd.Series]:
+        """Build the five keeper columns, and leave them empty for anybody else."""
+        of_a_keeper = {
+            "goalkeeper_actions": counts["goalkeeper_actions"].astype(int),
+            "goalkeeper_actions_outside_box": counts[
+                "goalkeeper_actions_outside_box"
+            ].astype(int),
+            "goalkeeper_action_height_in_metres": (
+                self._how_far_up_the_pitch_on_average(
+                    counts["goalkeeper_height_sum"], counts["goalkeeper_actions"]
+                )
+            ),
+            "goalkeeper_long_passes": counts["goalkeeper_long_passes"].astype(int),
+            "goalkeeper_passes": counts["goalkeeper_passes"].astype(int),
+        }
         return {
-            "goalkeeper_actions": int(counter["goalkeeper_actions"]),
-            "goalkeeper_actions_outside_box": int(
-                counter["goalkeeper_actions_outside_box"]
-            ),
-            "goalkeeper_action_height_in_metres": self._how_far_up_the_pitch_on_average(
-                counter["goalkeeper_height_sum"], counter["goalkeeper_actions"]
-            ),
-            "goalkeeper_long_passes": int(counter["goalkeeper_long_passes"]),
-            "goalkeeper_passes": int(counter["goalkeeper_passes"]),
+            name: column.where(is_goalkeeper, "")
+            for name, column in of_a_keeper.items()
         }
 
     def _how_far_up_the_pitch_on_average(
-        self, height_sum: float, action_count: float
-    ) -> Any:
+        self, height_sum: pd.Series, action_count: pd.Series
+    ) -> pd.Series:
         """How far up the pitch somebody acted on average.
 
         Returns:
-            The mean, or an empty cell when there was no such action at all,
-            because a zero would claim they acted on their own goal line.
+            The mean per row, or an empty cell where there was no such action
+            at all, because a zero would claim they acted on their own goal
+            line.
         """
-        if not action_count:
-            return ""
-        return round(
-            height_sum / action_count,
-            PlayerMatchMetricFeature.HEIGHT_DECIMAL_PLACES,
+        acted_at_all = action_count != 0
+        mean_height = height_sum / action_count.where(acted_at_all)
+        return (
+            DecimalRounder(PlayerMatchMetricFeature.HEIGHT_DECIMAL_PLACES)
+            .round_every_value(mean_height)
+            .where(acted_at_all, "")
         )
 
 
@@ -1815,9 +2100,46 @@ class ExpectedThreatGrid:
         )
         return row * ExpectedThreatFeature.COLUMN_COUNT + column
 
+    def which_cell_every_place_falls_into(
+        self, x_in_metres: pd.Series, y_in_metres: pd.Series
+    ) -> pd.Series:
+        """Say of a whole column of places which cell each falls into.
+
+        Args:
+            x_in_metres: Counted towards the goal being attacked.
+            y_in_metres: Counted across the pitch.
+
+        Returns:
+            The cell of every row, each kept inside the grid even for a
+            coordinate the source put slightly off the pitch.
+        """
+        column = self._kept_inside_every_grid(
+            x_in_metres
+            / PitchGeometry.LENGTH_IN_METRES
+            * ExpectedThreatFeature.COLUMN_COUNT,
+            ExpectedThreatFeature.COLUMN_COUNT,
+        )
+        row = self._kept_inside_every_grid(
+            y_in_metres
+            / PitchGeometry.WIDTH_IN_METRES
+            * ExpectedThreatFeature.ROW_COUNT,
+            ExpectedThreatFeature.ROW_COUNT,
+        )
+        return row * ExpectedThreatFeature.COLUMN_COUNT + column
+
     def gain_between(self, start_cell: int, end_cell: int) -> float:
         """What moving the ball from one cell to another was worth."""
         return self._values[end_cell] - self._values[start_cell]
+
+    def gain_of_every_move(
+        self, start_cells: pd.Series, end_cells: pd.Series
+    ) -> pd.Series:
+        """What moving the ball was worth, for a whole column of moves."""
+        values = np.array(self._values)
+        return pd.Series(
+            values[end_cells.to_numpy()] - values[start_cells.to_numpy()],
+            index=start_cells.index,
+        )
 
     def to_rows(self) -> list[dict[str, Any]]:
         """Build one row per cell, so the grid can be written down."""
@@ -1844,6 +2166,14 @@ class ExpectedThreatGrid:
     def _kept_inside_the_grid(self, position: int, count: int) -> int:
         """Keep a column or a row inside the grid."""
         return min(count - 1, max(0, position))
+
+    def _kept_inside_every_grid(self, position: pd.Series, count: int) -> pd.Series:
+        """Keep a whole column of columns or rows inside the grid.
+
+        The place is cut towards zero rather than rounded, the way the walk
+        this replaces cut it, so a point at 0.9 of a cell still lies in it.
+        """
+        return position.astype(int).clip(lower=0, upper=count - 1)
 
 
 class ExpectedThreatGridFile:
@@ -2332,11 +2662,12 @@ class WyscoutDataReader:
     def read_the_identity_of_every_match(
         self, lookups: WyscoutNameLookups
     ) -> pd.DataFrame:
-        """Say of every match which competition and which two teams it was.
+        """Say of every match which competition, which two teams and which referee.
 
         Returns:
-            One row per match, with names rather than identifiers, in the
-            shape every calculator joins its actions onto.
+            One row per match, in the shape every calculator joins its actions
+            onto. The two team identifiers come along beside the names,
+            because the raw events name a team by its identifier only.
         """
         facts_of_match = self.read_match_facts()
         facts = pd.DataFrame(
@@ -2348,6 +2679,7 @@ class WyscoutDataReader:
                     "match_date": one.match_date,
                     "home_team_identifier": one.home_team_identifier,
                     "away_team_identifier": one.away_team_identifier,
+                    "referee_identifier": one.referee_identifier,
                 }
                 for one in facts_of_match.values()
             ]
@@ -2366,6 +2698,11 @@ class WyscoutDataReader:
                 "away_team_name": facts["away_team_identifier"]
                 .map(lookups.team_names)
                 .fillna(facts["away_team_identifier"]),
+                "referee_name": facts["referee_identifier"]
+                .map(lookups.referee_names)
+                .fillna(facts["referee_identifier"]),
+                "home_team_identifier": facts["home_team_identifier"],
+                "away_team_identifier": facts["away_team_identifier"],
             }
         )
 
@@ -2499,98 +2836,6 @@ class WyscoutDataReader:
             index=raw_values.index,
         )
 
-    def stream_actions_of_every_match(
-        self, lookups: WyscoutNameLookups
-    ) -> Iterator[tuple[str, list[MatchAction]]]:
-        """Walk the action file and hand over one match at a time.
-
-        The file holds every action of every match in one stream, sorted by
-        match, and is several hundred megabytes. Collecting a match and giving
-        it away keeps one match in memory rather than all of them.
-
-        Yields:
-            The match identifier and its actions, in the order they were
-            played. A match without a single readable action is skipped.
-        """
-        action_file = CsvFile(
-            WyscoutEventFile.SOURCE_FOLDER / WyscoutEventFile.ACTION_FILE_NAME
-        )
-        current_game = ""
-        actions: list[MatchAction] = []
-        for row in action_file.stream_rows():
-            game_identifier = self.as_identifier(
-                row[WyscoutEventFile.ACTION_GAME_COLUMN]
-            )
-            if game_identifier != current_game:
-                if actions:
-                    yield current_game, actions
-                current_game, actions = game_identifier, []
-            action = self.read_one_action(row, lookups)
-            if action is not None:
-                actions.append(action)
-        if actions:
-            yield current_game, actions
-
-    def read_one_action(
-        self, row: dict[str, str], lookups: WyscoutNameLookups
-    ) -> MatchAction | None:
-        """Read one row of the action file, in the direction everything else uses.
-
-        Returns:
-            The action with its team and player named, or None when a
-            coordinate or a time is missing, which happens for the rows the
-            conversion could not place on the pitch.
-        """
-        try:
-            start_x = self.mirror_along_the_pitch(
-                float(row[WyscoutEventFile.ACTION_START_X_COLUMN])
-            )
-            end_x = self.mirror_along_the_pitch(
-                float(row[WyscoutEventFile.ACTION_END_X_COLUMN])
-            )
-            start_y = float(row[WyscoutEventFile.ACTION_START_Y_COLUMN])
-            end_y = float(row[WyscoutEventFile.ACTION_END_Y_COLUMN])
-            period_number = int(float(row[WyscoutEventFile.ACTION_PERIOD_COLUMN]))
-            second_in_period = float(row[WyscoutEventFile.ACTION_SECOND_COLUMN])
-        except (KeyError, TypeError, ValueError):
-            return None
-
-        kind = MatchStyleFeature.KIND_OF_SPADL_TYPE.get(
-            row[WyscoutEventFile.ACTION_TYPE_COLUMN], MatchStyleFeature.OTHER_KIND
-        )
-        result_name = row[WyscoutEventFile.ACTION_RESULT_COLUMN]
-        team_identifier = self.as_identifier(row[WyscoutEventFile.ACTION_TEAM_COLUMN])
-        player_identifier = self.as_identifier(
-            row[WyscoutEventFile.ACTION_PLAYER_COLUMN]
-        )
-        return MatchAction(
-            team_name=lookups.team_names.get(team_identifier, team_identifier),
-            kind=kind,
-            was_successful=result_name == WyscoutEventFile.SUCCESSFUL_RESULT_NAME,
-            start_x_in_metres=start_x,
-            start_y_in_metres=start_y,
-            end_x_in_metres=end_x,
-            end_y_in_metres=end_y,
-            scoring_team=self._scoring_team_of(kind, result_name),
-            expected_goals=None,
-            was_after_a_set_piece=False,
-            period_number=period_number,
-            second_in_period=second_in_period,
-            player_name=lookups.player_names.get(player_identifier, player_identifier),
-            player_identifier=player_identifier,
-        )
-
-    def _scoring_team_of(self, kind: str, result_name: str) -> str | None:
-        """Say who a goal counted for, or None when the action was no goal."""
-        if (
-            kind in MatchStyleFeature.SHOT_KINDS
-            and result_name == WyscoutEventFile.SUCCESSFUL_RESULT_NAME
-        ):
-            return MatchStyleFeature.SCORED_FOR_THE_ACTING_TEAM
-        if result_name == WyscoutEventFile.OWN_GOAL_RESULT_NAME:
-            return MatchStyleFeature.SCORED_FOR_THE_OTHER_TEAM
-        return None
-
     def as_identifier(self, raw_value: str) -> str:
         """Turn an identifier into the one form every table can be joined on.
 
@@ -2607,69 +2852,147 @@ class WyscoutDataReader:
         except (TypeError, ValueError):
             return raw_value.strip()
 
-    def read_player_roles(self) -> dict[str, str]:
-        """Read the position of every player, by identifier.
+    def read_every_substitution(self) -> pd.DataFrame:
+        """Read every substitution of every match out of the match files.
+
+        Wyscout writes the substitutions of a team as a Python literal inside
+        a single cell, so that cell is parsed one at a time. Everything after
+        that is table work.
 
         Returns:
-            The two letter code of each player, GK, DF, MF or FW. A player
-            whose cell holds no code comes back with an empty role.
+            One row per substitution, the two teams still named by identifier,
+            with the raw player identifiers and the minute as the source wrote
+            them. The rows come in the order the match files list them, both
+            sides of a match together.
         """
-        role_pattern = re.compile(PlayerMatchMetricFeature.ROLE_CODE_PATTERN)
-        source_file = CsvFile(
-            WyscoutEventFile.SOURCE_FOLDER / WyscoutEventFile.PLAYER_FILE_NAME
-        )
-        roles: dict[str, str] = {}
-        for row in source_file.read_rows():
-            found = role_pattern.search(
-                row.get(PlayerMatchMetricFeature.ROLE_COLUMN, "")
+        of_every_file = [
+            self._read_the_substitutions_of_one_file(match_file)
+            for match_file in sorted(
+                WyscoutEventFile.SOURCE_FOLDER.glob(WyscoutEventFile.MATCH_FILE_PATTERN)
             )
-            roles[self.as_identifier(row[WyscoutEventFile.IDENTIFIER_COLUMN])] = (
-                found.group(1) if found else ""
-            )
-        return roles
+        ]
+        return pd.concat(of_every_file, ignore_index=True)
 
-    def read_appearances(self) -> dict[tuple[str, str], PlayerAppearance]:
+    def _read_the_substitutions_of_one_file(self, match_file: Path) -> pd.DataFrame:
+        """Read the substitutions of both sides of every match of one file."""
+        matches = CsvFile(match_file).read_table()
+        of_both_sides = pd.concat(
+            [
+                self._read_the_substitutions_of_one_side(matches, side, side_number)
+                for side_number, side in enumerate(SubstitutionFeature.TEAM_SIDES)
+            ]
+        )
+        in_the_order_of_the_file = of_both_sides.assign(
+            row_in_the_file=of_both_sides.index
+        ).sort_values(["row_in_the_file", "side_number"], kind="stable")
+        return in_the_order_of_the_file.drop(
+            columns=["row_in_the_file", "side_number"]
+        ).reset_index(drop=True)
+
+    def _read_the_substitutions_of_one_side(
+        self, matches: pd.DataFrame, side: tuple[str, str, str], side_number: int
+    ) -> pd.DataFrame:
+        """Read the substitutions one side of every match of one file made."""
+        team_column, list_column, opponent_column = side
+        of_the_side = (
+            matches.assign(
+                substitution=matches[list_column].map(self.read_list_out_of_one_cell)
+            )
+            .explode("substitution")
+            .dropna(subset=["substitution"])
+        )
+        one_substitution = of_the_side["substitution"]
+        return pd.DataFrame(
+            {
+                "game_identifier": self.identifier_of_every_row(
+                    of_the_side[WyscoutEventFile.IDENTIFIER_COLUMN]
+                ),
+                "competition_identifier": self.identifier_of_every_row(
+                    of_the_side[WyscoutEventFile.COMPETITION_IDENTIFIER_COLUMN]
+                ),
+                "season_name": of_the_side[WyscoutEventFile.SEASON_IDENTIFIER_COLUMN],
+                "match_date": of_the_side[WyscoutEventFile.MATCH_DATE_COLUMN].str[
+                    : StatsBombOpenDataSource.DATE_LENGTH
+                ],
+                "team_identifier": self.identifier_of_every_row(
+                    of_the_side[team_column]
+                ),
+                "opponent_identifier": self.identifier_of_every_row(
+                    of_the_side[opponent_column]
+                ),
+                "player_out": one_substitution.str.get(
+                    SubstitutionFeature.PLAYER_OUT_FIELD
+                ),
+                "player_in": one_substitution.str.get(
+                    SubstitutionFeature.PLAYER_IN_FIELD
+                ),
+                "minute": one_substitution.str.get(SubstitutionFeature.MINUTE_FIELD),
+                "side_number": side_number,
+            }
+        )
+
+    def name_every_substituted_player(self, raw_identifiers: pd.Series) -> pd.Series:
+        """Name every player of a substitution, keeping the raw value if unknown."""
+        looked_up = self.identifier_of_every_row(raw_identifiers.astype(str)).map(
+            self.read_player_names()
+        )
+        return looked_up.where(looked_up.notna(), raw_identifiers)
+
+    def read_the_role_of_every_player(self) -> pd.DataFrame:
+        """Read the position of every player, out of the player table.
+
+        Returns:
+            One row per player, with the two letter code GK, DF, MF or FW. A
+            player whose cell holds no code comes back with an empty role.
+        """
+        players = CsvFile(
+            WyscoutEventFile.SOURCE_FOLDER / WyscoutEventFile.PLAYER_FILE_NAME
+        ).read_table()
+        return pd.DataFrame(
+            {
+                "player_identifier": self.identifier_of_every_row(
+                    players[WyscoutEventFile.IDENTIFIER_COLUMN]
+                ),
+                "role": players[PlayerMatchMetricFeature.ROLE_COLUMN]
+                .str.extract(PlayerMatchMetricFeature.ROLE_CODE_PATTERN, expand=False)
+                .fillna(""),
+            }
+        )
+
+    def read_every_appearance(self) -> pd.DataFrame:
         """Read who played in which match, and for how many minutes.
 
         Returns:
-            One entry per player and match, keyed by the two identifiers.
-            Somebody who stayed on the bench is left out, because a row of
-            zeros over zero minutes says nothing.
+            One row per player and match. Somebody who stayed on the bench is
+            left out, because a row of zeros over zero minutes says nothing.
         """
-        source_file = CsvFile(
+        played = CsvFile(
             WyscoutEventFile.SOURCE_FOLDER
             / PlayerMatchMetricFeature.APPEARANCE_FILE_NAME
+        ).read_table()
+        minutes_played = (
+            pd.to_numeric(
+                played[PlayerMatchMetricFeature.MINUTES_COLUMN], errors="coerce"
+            )
+            .fillna(0)
+            .astype(int)
         )
-        appearances: dict[tuple[str, str], PlayerAppearance] = {}
-        for row in source_file.read_rows():
-            minutes_played = self._read_as_a_count(
-                row.get(PlayerMatchMetricFeature.MINUTES_COLUMN)
-            )
-            if minutes_played <= 0:
-                continue
-            player_identifier = self.as_identifier(
-                row[WyscoutEventFile.ACTION_PLAYER_COLUMN]
-            )
-            game_identifier = self.as_identifier(
-                row[WyscoutEventFile.ACTION_GAME_COLUMN]
-            )
-            appearances[(player_identifier, game_identifier)] = PlayerAppearance(
-                player_name=row.get(
-                    PlayerMatchMetricFeature.PLAYER_NAME_COLUMN, player_identifier
+        appearances = pd.DataFrame(
+            {
+                "player_identifier": self.identifier_of_every_row(
+                    played[WyscoutEventFile.ACTION_PLAYER_COLUMN]
                 ),
-                team_identifier=self.as_identifier(
-                    row[WyscoutEventFile.ACTION_TEAM_COLUMN]
+                "game_identifier": self.identifier_of_every_row(
+                    played[WyscoutEventFile.ACTION_GAME_COLUMN]
                 ),
-                minutes_played=minutes_played,
-            )
-        return appearances
-
-    def _read_as_a_count(self, value: str | None) -> int:
-        """Read a count, or zero when the cell holds no number at all."""
-        try:
-            return int(float(value or 0))
-        except (TypeError, ValueError):
-            return 0
+                "team_identifier": self.identifier_of_every_row(
+                    played[WyscoutEventFile.ACTION_TEAM_COLUMN]
+                ),
+                "player_name": played[PlayerMatchMetricFeature.PLAYER_NAME_COLUMN],
+                "minutes_played": minutes_played,
+            }
+        )
+        return appearances[minutes_played > 0].reset_index(drop=True)
 
     def read_list_out_of_one_cell(self, cell: str) -> list[Any]:
         """Read a list the source squeezed into a single cell.
@@ -2710,25 +3033,128 @@ class WyscoutDataReader:
                 )
         return ""
 
-    def read_card_names_out_of_tag_list(self, tag_list: str) -> list[str]:
-        """Read which cards one event carries.
+    def name_every_counted_player(
+        self, per_player: pd.DataFrame, identities: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Put the match around every counted player, with names for the numbers.
 
         Args:
-            tag_list: The tag cell of one event, numbers among other text.
+            per_player: One row per player of a match, keyed by game, player
+                and team identifier, with whatever was counted alongside.
+            identities: The prepared match table, which names both teams and
+                says which of them played at home.
 
         Returns:
-            One name per card tag found. Empty when the numbers in the cell
-            are other tags that merely start with the same digits.
+            The counts with the columns of their match beside them and a
+            team_name, opponent_name and player_name added. A player whose
+            match is in no match file drops out: the row could name neither
+            the opponent nor the day it was played.
         """
-        if WyscoutEventFile.CARD_TAG_PREFIX not in tag_list:
-            return []
-        return [
-            WyscoutEventFile.CARD_OF_TAG[tag]
-            for tag in {
-                int(number) for number in self._number_pattern.findall(tag_list)
-            }
-            if tag in WyscoutEventFile.CARD_OF_TAG
+        of_named_matches = per_player.merge(identities, on="game_identifier")
+        plays_at_home = (
+            of_named_matches["team_identifier"]
+            == of_named_matches["home_team_identifier"]
+        )
+        team_names = self.read_team_names()
+        return of_named_matches.assign(
+            team_name=self.name_every_identifier(
+                of_named_matches["team_identifier"], team_names
+            ),
+            opponent_name=self.name_every_identifier(
+                of_named_matches["away_team_identifier"].where(
+                    plays_at_home, of_named_matches["home_team_identifier"]
+                ),
+                team_names,
+            ),
+            player_name=self.name_every_identifier(
+                of_named_matches["player_identifier"], self.read_player_names()
+            ),
+        )
+
+    def name_every_identifier(
+        self, identifiers: pd.Series, names: dict[str, str]
+    ) -> pd.Series:
+        """Look every identifier up, and leave the identifier where none is known."""
+        return identifiers.map(names).fillna(identifiers)
+
+    def read_the_card_of_every_event(self, tag_lists: pd.Series) -> pd.DataFrame:
+        """Say of a whole column of tag cells which cards each one carries.
+
+        A tag cell holds numbers among other text, and a card tag has to be
+        matched as a whole number: 1702 is a yellow, but a cell holding 17020
+        carries no card at all.
+
+        Returns:
+            One boolean column per kind of card, in the order the cards are
+            counted in.
+        """
+        return pd.DataFrame(
+            {
+                card_name: tag_lists.str.contains(
+                    WyscoutEventFile.EXACT_NUMBER_PATTERN.format(number=tag),
+                    regex=True,
+                )
+                for tag, card_name in WyscoutEventFile.CARD_OF_TAG.items()
+            },
+            index=tag_lists.index,
+        )
+
+    def read_every_card_and_foul(self) -> pd.DataFrame:
+        """Read every foul and every carded event out of the raw event files.
+
+        The seven event files hold half a gigabyte between them, but each one
+        is a table and everything counted over them is a group by, so they are
+        read whole rather than streamed row by row.
+
+        Returns:
+            One row per event that was a foul or carried a card, with a one or
+            a zero under each of the counted names. An event that names no
+            player is kept: a card of a whole bench belongs to no player but
+            still counts towards the team.
+        """
+        of_every_file = [
+            self._read_the_cards_and_fouls_of_one_file(event_file)
+            for event_file in sorted(
+                WyscoutEventFile.SOURCE_FOLDER.glob(WyscoutEventFile.EVENT_FILE_PATTERN)
+            )
         ]
+        return pd.concat(of_every_file, ignore_index=True)
+
+    def _read_the_cards_and_fouls_of_one_file(self, event_file: Path) -> pd.DataFrame:
+        """Read the fouls and cards out of the events of one competition."""
+        raw_events = pd.read_csv(
+            event_file,
+            usecols=list(WyscoutEventFile.EVENT_COLUMNS_TO_READ),
+            dtype=str,
+            keep_default_na=False,
+            encoding=CsvFileSetting.ENCODING,
+            encoding_errors=CsvFileSetting.IGNORE_BROKEN_CHARACTERS,
+        )
+        cards = self.read_the_card_of_every_event(
+            raw_events[WyscoutEventFile.TAG_LIST_COLUMN]
+        )
+        player_identifier = self.identifier_of_every_row(
+            raw_events[WyscoutEventFile.PLAYER_IDENTIFIER_COLUMN]
+        )
+        is_a_foul = (
+            raw_events[WyscoutEventFile.EVENT_NAME_COLUMN]
+            == WyscoutEventFile.FOUL_EVENT_NAME
+        )
+        marked = pd.DataFrame(
+            {
+                "game_identifier": self.identifier_of_every_row(
+                    raw_events[WyscoutEventFile.MATCH_IDENTIFIER_COLUMN]
+                ),
+                "team_identifier": self.identifier_of_every_row(
+                    raw_events[WyscoutEventFile.TEAM_IDENTIFIER_COLUMN]
+                ),
+                "player_identifier": player_identifier,
+                EventSourceSetting.FOUL_NAME: is_a_foul.astype(int),
+                **{name: cards[name].astype(int) for name in cards.columns},
+            }
+        )
+        counts_towards_anything = is_a_foul.astype(bool) | cards.any(axis="columns")
+        return marked[counts_towards_anything]
 
     def mirror_along_the_pitch(self, distance_from_the_goal: float) -> float:
         """Mirror a coordinate, because Wyscout attacks the other way.
@@ -2865,11 +3291,23 @@ class StatsBombOpenDataReader:
         return StatsBombOpenDataSource.CARD_OF_NAME.get(card_name or "")
 
     def read_the_actions_of_one_match(self, match: dict[str, Any]) -> pd.DataFrame:
-        """Read the events of one match as the action table every builder groups.
+        """Read the events of one match as the action table every builder groups."""
+        return self.read_the_actions_out_of(self.read_events(match), match)
+
+    def read_the_actions_out_of(
+        self, events: list[dict[str, Any]], match: dict[str, Any]
+    ) -> pd.DataFrame:
+        """Turn the events already fetched into the action table.
 
         StatsBomb hands its events over as JSON documents, one file per match,
         so the step that turns a document into an action is still a walk over
         the events. Everything that comes after it is table work.
+
+        Args:
+            events: The events of the match, so a caller that wants more than
+                one table out of them pays for the download only once.
+            match: The match document those events belong to, for its
+                identifier.
 
         Returns:
             One row per event the reader could place on the pitch, in the
@@ -2877,9 +3315,7 @@ class StatsBombOpenDataReader:
         """
         actions = [
             action
-            for action in (
-                self.read_one_action(event) for event in self.read_events(match)
-            )
+            for action in (self.read_one_action(event) for event in events)
             if action is not None
         ]
         return pd.DataFrame(
@@ -2911,6 +3347,149 @@ class StatsBombOpenDataReader:
             ],
         )
 
+    def read_the_events_out_of(
+        self, events: list[dict[str, Any]], match: dict[str, Any]
+    ) -> pd.DataFrame:
+        """Turn the events already fetched into one row each.
+
+        The action table throws away everything that says nothing about how a
+        team played, and six builders need exactly that: the card that was
+        shown, the pressure the ball was under, who received a pass and who
+        came on for whom. Those live here instead.
+
+        Returns:
+            One row per event, in the order the source lists them.
+        """
+        return pd.DataFrame(
+            [
+                {
+                    "game_identifier": str(
+                        match[StatsBombOpenDataSource.MATCH_IDENTIFIER_FIELD]
+                    ),
+                    **self._read_one_event_row(event),
+                }
+                for event in events
+            ],
+            columns=StatsBombPreparedTable.EVENT_COLUMN_NAMES,
+        )
+
+    def _read_one_event_row(self, event: dict[str, Any]) -> dict[str, Any]:
+        """Read the one row of the prepared event table that one event fills."""
+        pass_details = event.get(StatsBombOpenDataSource.PASS_FIELD, {})
+        start_point = self._point_or_nowhere(
+            event.get(StatsBombOpenDataSource.LOCATION_FIELD)
+        )
+        end_point = self._point_or_nowhere(
+            self._where_a_move_ended(event, pass_details)
+        )
+        return {
+            "event_name": self._name_of(event, StatsBombOpenDataSource.TYPE_FIELD),
+            "team_name": self._name_of(event, StatsBombOpenDataSource.TEAM_FIELD),
+            "player_name": self._name_of(event, StatsBombOpenDataSource.PLAYER_FIELD),
+            "player_identifier": self._identifier_of(
+                event.get(StatsBombOpenDataSource.PLAYER_FIELD, {})
+            ),
+            "minute_in_match": int(
+                event.get(StatsBombOpenDataSource.MINUTE_FIELD) or 0
+            ),
+            "was_under_pressure": bool(
+                event.get(PressResistanceFeature.UNDER_PRESSURE_FIELD)
+            ),
+            "card_name": self.read_card_name_of(event) or "",
+            "start_x_in_metres": start_point[0],
+            "start_y_in_metres": start_point[1],
+            "end_x_in_metres": end_point[0],
+            "end_y_in_metres": end_point[1],
+            "pass_type_name": self._name_of(
+                pass_details, StatsBombOpenDataSource.TYPE_FIELD
+            ),
+            "was_a_cross": bool(pass_details.get(StatsBombOpenDataSource.CROSS_FIELD)),
+            "was_a_completed_pass": bool(pass_details)
+            and StatsBombOpenDataSource.OUTCOME_FIELD not in pass_details,
+            "receiver_name": self._name_of(
+                pass_details, StatsBombOpenDataSource.RECIPIENT_FIELD
+            ),
+            "was_a_completed_take_on": self._has_come_out_on_top(
+                event, MatchStyleFeature.DRIBBLE_EVENT_NAME
+            ),
+            "replacement_player_name": self._name_of(
+                event.get(SubstitutionFeature.SUBSTITUTION_FIELD, {}),
+                SubstitutionFeature.REPLACEMENT_FIELD,
+            ),
+            "replacement_player_identifier": self._identifier_of(
+                event.get(SubstitutionFeature.SUBSTITUTION_FIELD, {}).get(
+                    SubstitutionFeature.REPLACEMENT_FIELD, {}
+                )
+            ),
+        }
+
+    def _where_a_move_ended(
+        self, event: dict[str, Any], pass_details: dict[str, Any]
+    ) -> list[float] | None:
+        """Read where a pass or a carry ended, and nowhere for anything else."""
+        if pass_details:
+            return pass_details.get(StatsBombOpenDataSource.END_LOCATION_FIELD)
+        return event.get(ExpectedThreatFeature.CARRY_FIELD, {}).get(
+            StatsBombOpenDataSource.END_LOCATION_FIELD
+        )
+
+    def _point_or_nowhere(self, point: list[float] | None) -> tuple[float, float]:
+        """Convert a point onto our pitch, or say it lies nowhere at all."""
+        if not point:
+            return (float("nan"), float("nan"))
+        return self.point_on_our_pitch_in_metres(point)
+
+    def _name_of(self, holder: dict[str, Any], field_name: str) -> str:
+        """Read the name out of a nested field, empty where the field is missing."""
+        return (holder.get(field_name) or {}).get(
+            StatsBombOpenDataSource.NAME_FIELD
+        ) or ""
+
+    def _identifier_of(self, player: dict[str, Any]) -> str:
+        """Read the identifier of a player, empty where none is named."""
+        identifier = player.get(PlayerMatchMetricFeature.IDENTIFIER_FIELD)
+        return "" if identifier is None else str(identifier)
+
+    def read_the_starting_line_ups_out_of(
+        self, events: list[dict[str, Any]], match: dict[str, Any]
+    ) -> pd.DataFrame:
+        """Turn the two starting line up events into one row per player.
+
+        StatsBomb writes a whole line up as a single event holding eleven
+        players, so it cannot live in a table of one row per event.
+
+        Returns:
+            One row per player who started, with the position they held.
+        """
+        return pd.DataFrame(
+            [
+                {
+                    "game_identifier": str(
+                        match[StatsBombOpenDataSource.MATCH_IDENTIFIER_FIELD]
+                    ),
+                    "team_name": self._name_of(
+                        event, StatsBombOpenDataSource.TEAM_FIELD
+                    ),
+                    "player_identifier": self._identifier_of(
+                        entry.get(StatsBombOpenDataSource.PLAYER_FIELD, {})
+                    ),
+                    "player_name": self._name_of(
+                        entry, StatsBombOpenDataSource.PLAYER_FIELD
+                    ),
+                    "position_name": self._name_of(
+                        entry, PlayerMatchMetricFeature.POSITION_FIELD
+                    ),
+                }
+                for event in events
+                if self._name_of(event, StatsBombOpenDataSource.TYPE_FIELD)
+                == PlayerMatchMetricFeature.STARTING_LINE_UP_EVENT_NAME
+                for entry in event.get(PlayerMatchMetricFeature.TACTICS_FIELD, {}).get(
+                    PlayerMatchMetricFeature.LINE_UP_FIELD, []
+                )
+            ],
+            columns=StatsBombPreparedTable.LINE_UP_COLUMN_NAMES,
+        )
+
     def read_the_identity_of_one_match(
         self, match: dict[str, Any], competition: StatsBombCompetition
     ) -> dict[str, Any]:
@@ -2928,6 +3507,7 @@ class StatsBombOpenDataReader:
             "away_team_name": match[StatsBombOpenDataSource.AWAY_TEAM_FIELD][
                 StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
             ],
+            "referee_name": self._name_of(match, StatsBombOpenDataSource.REFEREE_FIELD),
         }
 
     def read_one_action(self, event: dict[str, Any]) -> MatchAction | None:

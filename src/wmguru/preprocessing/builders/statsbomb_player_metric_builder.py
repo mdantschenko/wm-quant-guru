@@ -3,39 +3,35 @@
 StatsBomb has no minutes column, so who was on the pitch and for how long is
 read out of the starting line up and the substitutions. A match that ran into
 extra time therefore ends when its last event does, not after ninety minutes.
-
-The file is written after every competition, so a stopped run picks up where it
-left off.
 """
 
-from typing import Any
+import numpy as np
+import pandas as pd
 
 from wmguru.helpers.constant import (
     EventSourceSetting,
     PlayerMatchMetricFeature,
-    StatsBombOpenDataSource,
     SubstitutionFeature,
-    WebRequestSetting,
 )
-from wmguru.helpers.data_class import PlayerAppearance, StatsBombCompetition
 from wmguru.helpers.utils import (
     CsvFile,
     PlayerMatchMetricCalculator,
+    PreparedStatsBombTables,
     SharedFeatureFile,
-    StatsBombOpenDataReader,
-    WebFileDownloader,
 )
 
 
 class StatsBombPlayerMetricBuilder:
     """What every StatsBomb player did in every match they played."""
 
+    PLAYER_KEYS = ["game_identifier", "player_identifier"]
+
     def __init__(
         self,
-        statsbomb_reader: StatsBombOpenDataReader,
+        prepared_tables: PreparedStatsBombTables,
         player_metric_calculator: PlayerMatchMetricCalculator,
     ) -> None:
-        self._statsbomb_reader = statsbomb_reader
+        self._prepared_tables = prepared_tables
         self._player_metric_calculator = player_metric_calculator
         self._output_file = SharedFeatureFile(
             CsvFile(
@@ -46,240 +42,216 @@ class StatsBombPlayerMetricBuilder:
             PlayerMatchMetricFeature.SORT_KEY_NAMES,
         )
 
-    def build_every_competition(self) -> int:
-        """Walk every open competition and write the file after each one.
+    def build_every_match(self) -> int:
+        """Group the prepared events and write one row per player and match.
 
         Returns:
             How many rows the file holds afterwards, the rows the Wyscout half
             wrote included.
 
         Raises:
-            SystemExit: When the competition list could not be loaded.
+            SystemExit: When the events have not been prepared yet.
         """
-        own_rows = self._output_file.read_own_rows()
-        open_competitions = self._statsbomb_reader.read_open_competitions(
-            self._output_file.read_finished_keys()
+        events = self._prepared_tables.read_the_events()
+        appearances = self._read_who_was_on_the_pitch(events)
+        counts = self._player_metric_calculator.count_every_player(
+            self._actions_with_the_role_of_their_player(appearances)
         )
-        print(f"Open competitions {len(open_competitions)}", flush=True)
 
-        total_count = len(own_rows) + len(
-            self._output_file.read_rows_of_the_other_source()
-        )
-        for competition in open_competitions:
-            for match in self._statsbomb_reader.read_matches(competition):
-                own_rows.extend(self._build_rows_of_one_match(match, competition))
-            total_count = self._output_file.write_keeping_the_other_source(own_rows)
-            print(
-                f"  SAVED  {competition.competition_name} "
-                f"{competition.season_name} (file now {total_count})",
-                flush=True,
-            )
-        print(f"\nDone: the player metric file holds {total_count} rows.")
+        rows = self._build_the_rows_of_every_appearance(appearances, counts)
+        total_count = self._output_file.write_the_table_keeping_the_other_source(rows)
+        print(f"  OK    {len(rows)} player rows from StatsBomb, {total_count} in all")
         return total_count
 
-    def _build_rows_of_one_match(
-        self, match: dict[str, Any], competition: StatsBombCompetition
-    ) -> list[dict[str, Any]]:
-        """Build one row per player who was on the pitch in one match."""
-        events = self._statsbomb_reader.read_events(match)
-        appearances, roles = self._read_line_up(events)
-        counters = self._count_over_one_match(events, roles)
+    def _read_who_was_on_the_pitch(self, events: pd.DataFrame) -> pd.DataFrame:
+        """Read who played in every match, in which role and for how long.
 
-        home_team = match[StatsBombOpenDataSource.HOME_TEAM_FIELD][
-            StatsBombOpenDataSource.HOME_TEAM_NAME_FIELD
-        ]
-        away_team = match[StatsBombOpenDataSource.AWAY_TEAM_FIELD][
-            StatsBombOpenDataSource.AWAY_TEAM_NAME_FIELD
-        ]
-        match_date = self._statsbomb_reader.read_the_day_a_match_was_played(match)
-
-        rows: list[dict[str, Any]] = []
-        for player_identifier, appearance in appearances.items():
-            role = roles.get(player_identifier, "")
-            rows.append(
-                {
-                    EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.STATSBOMB_NAME,
-                    "date": match_date,
-                    "competition": competition.competition_name,
-                    "season": competition.season_name,
-                    "team": appearance.team_identifier,
-                    "opponent": (
-                        away_team
-                        if appearance.team_identifier == home_team
-                        else home_team
-                    ),
-                    "player": appearance.player_name,
-                    "role": role,
-                    "minutes": appearance.minutes_played,
-                    **self._player_metric_calculator.build_the_columns_of_one_player(
-                        counters.get(
-                            player_identifier,
-                            self._player_metric_calculator.start_a_counter_at_zero(),
-                        ),
-                        role == PlayerMatchMetricFeature.GOALKEEPER_ROLE,
-                    ),
-                }
-            )
-        return rows
-
-    def _count_over_one_match(
-        self, events: list[dict[str, Any]], roles: dict[str, str]
-    ) -> dict[str, dict[str, float]]:
-        """Count the actions of every player over the events of one match."""
-        counters: dict[str, dict[str, float]] = {}
-        for event in events:
-            action = self._statsbomb_reader.read_one_action(event)
-            if action is None or not action.player_identifier:
-                continue
-            counter = counters.setdefault(
-                action.player_identifier,
-                self._player_metric_calculator.start_a_counter_at_zero(),
-            )
-            self._player_metric_calculator.add_one_action(
-                counter,
-                action,
-                roles.get(action.player_identifier)
-                == PlayerMatchMetricFeature.GOALKEEPER_ROLE,
-            )
-        return counters
-
-    def _read_line_up(
-        self, events: list[dict[str, Any]]
-    ) -> tuple[dict[str, PlayerAppearance], dict[str, str]]:
-        """Read who played and in which position, out of the events.
+        A substitute gets the minutes from when they came on, the player they
+        replaced the minutes up to that moment, and whoever the last event
+        touching them names decides.
 
         Returns:
-            One appearance per player who was on the pitch, and the role of
-            each of them. A substitute gets the minutes from when they came
-            on, the player they replaced the minutes up to that moment.
+            One row per player who was on the pitch at all. Somebody whose
+            minutes come to nothing is left out, because a row of zeros over
+            zero minutes says nothing, and so is somebody who was only ever
+            taken off, because they were never put on.
         """
-        last_minute = self._last_minute_of(events)
-        appearances: dict[str, PlayerAppearance] = {}
-        roles: dict[str, str] = {}
-        for event in events:
-            self._add_the_starters(event, last_minute, appearances, roles)
-        for event in events:
-            self._apply_one_substitution(event, last_minute, appearances, roles)
-        return {
-            identifier: appearance
-            for identifier, appearance in appearances.items()
-            if appearance.minutes_played > 0
-        }, roles
-
-    def _last_minute_of(self, events: list[dict[str, Any]]) -> int:
-        """Read the minute the match ended in, extra time included."""
-        return max(
-            (
-                event.get(StatsBombOpenDataSource.MINUTE_FIELD, 0) or 0
-                for event in events
-            ),
-            default=PlayerMatchMetricFeature.FULL_MATCH_MINUTES,
+        last_minute = self._last_minute_of_every_match(events)
+        went_on_or_off = self._every_change_to_the_line_up(events, last_minute)
+        of_the_last_change = went_on_or_off.groupby(
+            self.PLAYER_KEYS, sort=False, as_index=False
+        ).last()
+        was_ever_put_on = of_the_last_change["team_name"].notna() & (
+            of_the_last_change["minutes_played"] > 0
+        )
+        return of_the_last_change[was_ever_put_on].assign(
+            minutes_played=of_the_last_change.loc[
+                was_ever_put_on, "minutes_played"
+            ].astype(int)
         )
 
-    def _add_the_starters(
-        self,
-        event: dict[str, Any],
-        last_minute: int,
-        appearances: dict[str, PlayerAppearance],
-        roles: dict[str, str],
-    ) -> None:
-        """Put the eleven players of one starting line up on the pitch."""
-        if (
-            event.get(StatsBombOpenDataSource.TYPE_FIELD, {}).get(
-                StatsBombOpenDataSource.NAME_FIELD
-            )
-            != PlayerMatchMetricFeature.STARTING_LINE_UP_EVENT_NAME
-        ):
-            return
-        team_name = event.get(StatsBombOpenDataSource.TEAM_FIELD, {}).get(
-            StatsBombOpenDataSource.NAME_FIELD
-        )
-        for entry in event.get(PlayerMatchMetricFeature.TACTICS_FIELD, {}).get(
-            PlayerMatchMetricFeature.LINE_UP_FIELD, []
-        ):
-            player = entry.get(StatsBombOpenDataSource.PLAYER_FIELD, {})
-            identifier = player.get(PlayerMatchMetricFeature.IDENTIFIER_FIELD)
-            if identifier is None:
-                continue
-            roles[str(identifier)] = self.role_of_position(
-                entry.get(PlayerMatchMetricFeature.POSITION_FIELD, {}).get(
-                    StatsBombOpenDataSource.NAME_FIELD, ""
-                )
-            )
-            appearances[str(identifier)] = PlayerAppearance(
-                player_name=player.get(StatsBombOpenDataSource.NAME_FIELD, ""),
-                team_identifier=team_name,
-                minutes_played=last_minute,
-            )
+    def _last_minute_of_every_match(self, events: pd.DataFrame) -> pd.Series:
+        """Read the minute every match ended in, extra time included."""
+        return events.groupby("game_identifier", sort=False)["minute_in_match"].max()
 
-    def _apply_one_substitution(
-        self,
-        event: dict[str, Any],
-        last_minute: int,
-        appearances: dict[str, PlayerAppearance],
-        roles: dict[str, str],
-    ) -> None:
-        """Take one player off and put their replacement on."""
-        if (
-            event.get(StatsBombOpenDataSource.TYPE_FIELD, {}).get(
-                StatsBombOpenDataSource.NAME_FIELD
-            )
-            != SubstitutionFeature.SUBSTITUTION_EVENT_NAME
-        ):
-            return
-        minute = event.get(StatsBombOpenDataSource.MINUTE_FIELD, 0) or 0
-        player_out = str(
-            event.get(StatsBombOpenDataSource.PLAYER_FIELD, {}).get(
-                PlayerMatchMetricFeature.IDENTIFIER_FIELD, ""
-            )
-        )
-        if player_out in appearances:
-            appearances[player_out] = PlayerAppearance(
-                player_name=appearances[player_out].player_name,
-                team_identifier=appearances[player_out].team_identifier,
-                minutes_played=minute,
-            )
-        replacement = event.get(SubstitutionFeature.SUBSTITUTION_FIELD, {}).get(
-            SubstitutionFeature.REPLACEMENT_FIELD, {}
-        )
-        identifier = replacement.get(PlayerMatchMetricFeature.IDENTIFIER_FIELD)
-        if identifier is None:
-            return
-        roles.setdefault(str(identifier), "")
-        appearances[str(identifier)] = PlayerAppearance(
-            player_name=replacement.get(StatsBombOpenDataSource.NAME_FIELD, ""),
-            team_identifier=event.get(StatsBombOpenDataSource.TEAM_FIELD, {}).get(
-                StatsBombOpenDataSource.NAME_FIELD
-            ),
-            minutes_played=max(0, last_minute - minute),
+    def _every_change_to_the_line_up(
+        self, events: pd.DataFrame, last_minute: pd.Series
+    ) -> pd.DataFrame:
+        """Put the starters on the pitch, then every substitution after them.
+
+        The starting line ups all come first, the way the walk this replaces
+        put the whole eleven on before it looked at a single substitution.
+        """
+        substitutions = events[
+            events["event_name"] == SubstitutionFeature.SUBSTITUTION_EVENT_NAME
+        ]
+        return pd.concat(
+            [
+                self._the_starters(last_minute),
+                self._who_came_on(substitutions, last_minute),
+                self._who_went_off(substitutions),
+            ]
+        ).sort_values("order_of_the_change", kind="stable")
+
+    def _the_starters(self, last_minute: pd.Series) -> pd.DataFrame:
+        """Put the eleven players of every starting line up on the pitch."""
+        line_ups = self._prepared_tables.read_the_starting_line_ups()
+        return pd.DataFrame(
+            {
+                "game_identifier": line_ups["game_identifier"],
+                "player_identifier": line_ups["player_identifier"],
+                "player_name": line_ups["player_name"],
+                "team_name": line_ups["team_name"],
+                "role": self.role_of_every_position(line_ups["position_name"]),
+                "minutes_played": line_ups["game_identifier"]
+                .map(last_minute)
+                .fillna(PlayerMatchMetricFeature.FULL_MATCH_MINUTES),
+                "order_of_the_change": 0,
+            }
         )
 
-    def role_of_position(self, position_name: str) -> str:
-        """Read the role out of a position name.
+    def _who_came_on(
+        self, substitutions: pd.DataFrame, last_minute: pd.Series
+    ) -> pd.DataFrame:
+        """Put every replacement on, for what was left of their match."""
+        minutes_left = substitutions["game_identifier"].map(last_minute) - (
+            substitutions["minute_in_match"]
+        )
+        return pd.DataFrame(
+            {
+                "game_identifier": substitutions["game_identifier"],
+                "player_identifier": substitutions["replacement_player_identifier"],
+                "player_name": substitutions["replacement_player_name"],
+                "team_name": substitutions["team_name"],
+                "role": "",
+                "minutes_played": minutes_left.clip(lower=0),
+                "order_of_the_change": substitutions.index + 1,
+            }
+        )
+
+    def _who_went_off(self, substitutions: pd.DataFrame) -> pd.DataFrame:
+        """Take every replaced player off, after the minute they lasted.
+
+        The role and the team of a player who goes off are left empty here,
+        because the change that put them on has already said both.
+        """
+        return pd.DataFrame(
+            {
+                "game_identifier": substitutions["game_identifier"],
+                "player_identifier": substitutions["player_identifier"],
+                "player_name": substitutions["player_name"],
+                "team_name": None,
+                "role": None,
+                "minutes_played": substitutions["minute_in_match"],
+                "order_of_the_change": substitutions.index + 1,
+            }
+        )
+
+    def role_of_every_position(self, position_names: pd.Series) -> pd.Series:
+        """Read the role out of a whole column of position names.
 
         Args:
-            position_name: What StatsBomb calls the position, such as Right
+            position_names: What StatsBomb calls the position, such as Right
                 Center Back or Left Wing.
 
         Returns:
-            The two letter role, or an empty one for a position none of the
-            words fit.
+            The two letter role of each, or an empty one for a position none
+            of the words fit. The first word that fits wins, so a wing back is
+            a defender rather than a forward.
         """
-        for word, role in PlayerMatchMetricFeature.ROLE_OF_POSITION_WORD:
-            if word in position_name:
-                return role
-        return ""
+        return pd.Series(
+            np.select(
+                [
+                    position_names.str.contains(word, regex=False)
+                    for word, _role in PlayerMatchMetricFeature.ROLE_OF_POSITION_WORD
+                ],
+                [
+                    role
+                    for _word, role in PlayerMatchMetricFeature.ROLE_OF_POSITION_WORD
+                ],
+                default="",
+            ),
+            index=position_names.index,
+        )
+
+    def _actions_with_the_role_of_their_player(
+        self, appearances: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Say of every action whether the player who made it keeps goal."""
+        actions = self._prepared_tables.read_the_actions()
+        of_the_player = actions.merge(
+            appearances[[*self.PLAYER_KEYS, "role"]], on=self.PLAYER_KEYS, how="left"
+        )
+        return of_the_player.assign(
+            is_goalkeeper=of_the_player["role"]
+            == PlayerMatchMetricFeature.GOALKEEPER_ROLE
+        )
+
+    def _build_the_rows_of_every_appearance(
+        self, appearances: pd.DataFrame, counts: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Build one row per appearance, whether the player touched the ball or not."""
+        sides = self._prepared_tables.read_the_sides_of_every_match()
+        of_named_matches = appearances.merge(sides, on="game_identifier")
+        counted = self._counts_lined_up_with(of_named_matches, counts)
+        plays_at_home = (
+            of_named_matches["team_name"] == of_named_matches["home_team_name"]
+        )
+        role = of_named_matches["role"]
+        return pd.DataFrame(
+            {
+                EventSourceSetting.SOURCE_COLUMN: EventSourceSetting.STATSBOMB_NAME,
+                "date": of_named_matches["match_date"],
+                "competition": of_named_matches["competition_name"],
+                "season": of_named_matches["season_name"],
+                "team": of_named_matches["team_name"],
+                "opponent": of_named_matches["away_team_name"].where(
+                    plays_at_home, of_named_matches["home_team_name"]
+                ),
+                "player": of_named_matches["player_name"],
+                "role": role,
+                "minutes": of_named_matches["minutes_played"],
+                **self._player_metric_calculator.build_the_columns_of_every_player(
+                    counted, role == PlayerMatchMetricFeature.GOALKEEPER_ROLE
+                ),
+            }
+        )
+
+    def _counts_lined_up_with(
+        self, appearances: pd.DataFrame, counts: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Look the counts of every appearance up, zeros where none were made."""
+        looked_up = appearances[["player_identifier", "game_identifier"]].merge(
+            counts, on=PlayerMatchMetricCalculator.PLAYER_KEYS, how="left"
+        )
+        return (
+            looked_up[list(PlayerMatchMetricCalculator.COUNTED_NAMES)]
+            .fillna(0.0)
+            .set_axis(appearances.index)
+        )
 
 
 if __name__ == "__main__":
     StatsBombPlayerMetricBuilder(
-        StatsBombOpenDataReader(
-            WebFileDownloader(
-                user_agent=WebRequestSetting.RESEARCH_USER_AGENT,
-                polite_delay_in_seconds=(
-                    StatsBombOpenDataSource.POLITE_DELAY_IN_SECONDS
-                ),
-            )
-        ),
-        PlayerMatchMetricCalculator(),
-    ).build_every_competition()
+        PreparedStatsBombTables(), PlayerMatchMetricCalculator()
+    ).build_every_match()
